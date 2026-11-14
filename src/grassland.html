@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>理想的世界 · 草原</title>
+<style>
+  :root {
+    --ink: #3b3a28;
+    --ink-soft: #5c5a42;
+    --ink-dim: rgba(59, 58, 40, .62);
+    --paper: rgba(253, 249, 236, .80);
+    --paper-strong: rgba(253, 249, 236, .92);
+    --line: rgba(92, 82, 52, .22);
+    --olive: #5d6a3a;
+    --olive-deep: #3f4a2a;
+    --gold: #c49a45;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #c9d4a4; overflow: hidden;
+    color: var(--ink);
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  canvas#scene {
+    position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+  }
+  canvas#scene:focus { outline: none; }
+  body.playing { cursor: none; }
+
+  #grade {
+    position: fixed; inset: 0; pointer-events: none; z-index: 2;
+    background:
+      radial-gradient(90% 72% at 76% 2%, rgba(255, 241, 196, .16), rgba(255, 241, 196, 0) 64%),
+      radial-gradient(122% 108% at 50% 48%, rgba(0, 0, 0, 0) 55%, rgba(46, 50, 26, .22) 100%);
+    mix-blend-mode: multiply;
+  }
+
+  .layer {
+    position: fixed; inset: 0; z-index: 5;
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 1.2s ease;
+  }
+  .hidden { display: none !important; }
+
+  /* ---------- 开场 ---------- */
+  #intro {
+    background:
+      radial-gradient(48% 42% at 50% 43%, rgba(253, 250, 238, .70), rgba(253, 250, 238, 0) 72%),
+      radial-gradient(120% 100% at 50% 112%, rgba(250, 247, 233, .70), rgba(250, 247, 233, .08) 60%),
+      linear-gradient(180deg, rgba(247, 245, 230, .50), rgba(247, 245, 230, .10) 44%, rgba(250, 247, 234, .70));
+    backdrop-filter: blur(2.5px);
+  }
+  #intro.dismiss { opacity: 0; pointer-events: none; }
+  .intro-inner {
+    text-align: center; padding: 0 28px;
+    transform: translateY(-1.2vh);
+  }
+  .eyebrow {
+    font-size: 11px; letter-spacing: .66em; padding-left: .66em;
+    color: rgba(59, 58, 40, .62); margin-bottom: 32px;
+    animation: rise 2.4s ease both;
+  }
+  h1 {
+    margin: 0; font-weight: 400;
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: clamp(46px, 7.4vw, 94px);
+    letter-spacing: .34em; padding-left: .34em;
+    color: #3d4528;
+    text-shadow: 0 2px 42px rgba(255, 252, 234, .9), 0 1px 2px rgba(255, 255, 255, .5);
+    animation: rise 2.8s .1s ease both;
+  }
+  .sub {
+    margin: 30px 0 0; font-size: clamp(12.5px, 1.3vw, 15px);
+    line-height: 2.2; letter-spacing: .24em; padding-left: .24em;
+    color: rgba(51, 52, 33, .86);
+    text-shadow: 0 1px 16px rgba(253, 250, 238, .96), 0 0 38px rgba(253, 250, 238, .72);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    animation: rise 3.2s .2s ease both;
+  }
+  #enter {
+    margin-top: 46px; padding: 15px 44px 15px 48px;
+    background: rgba(255, 252, 240, .68);
+    border: 1px solid rgba(92, 82, 52, .34); border-radius: 999px;
+    color: #46512d; font-size: 13.5px; letter-spacing: .48em;
+    font-family: inherit; cursor: pointer;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 10px 34px rgba(96, 94, 58, .12);
+    transition: background .55s ease, border-color .55s ease, transform .55s ease;
+    animation: rise 3.4s .3s ease both;
+  }
+  #enter:hover {
+    background: rgba(255, 252, 240, .86);
+    border-color: rgba(70, 78, 42, .58);
+    transform: translateY(-1px);
+  }
+
+  /* 场景切换 */
+  .scenes {
+    margin-top: 24px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    animation: rise 3.5s .38s ease both;
+  }
+  .scene-label {
+    font-size: 10px; letter-spacing: .3em; padding-left: .3em;
+    color: rgba(59, 58, 40, .5);
+    margin-right: 4px;
+  }
+  .scene {
+    padding: 8px 18px 8px calc(18px + .3em);
+    border: 1px solid rgba(92, 82, 52, .26);
+    border-radius: 999px;
+    background: rgba(255, 252, 240, .55);
+    color: rgba(59, 58, 40, .62);
+    font-family: inherit; font-size: 11.5px; letter-spacing: .3em;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+    transition: background .45s ease, color .45s ease, border-color .45s ease;
+  }
+  .scene:hover {
+    background: rgba(255, 252, 240, .88);
+    color: #46512d;
+    border-color: rgba(70, 78, 42, .5);
+  }
+  .scene.on {
+    background: #55602f;
+    color: #fbf8e9;
+    border-color: #55602f;
+    cursor: default;
+    box-shadow: 0 6px 16px rgba(60, 70, 30, .18);
+  }
+
+  .tip {
+    margin-top: 24px; font-size: 10.5px; letter-spacing: .24em;
+    color: rgba(48, 50, 31, .55);
+    text-shadow: 0 1px 10px rgba(253, 250, 238, .85);
+    animation: rise 3.6s .4s ease both;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ---------- 暂停 ---------- */
+  #pause {
+    background: rgba(244, 242, 226, .34);
+    backdrop-filter: blur(9px);
+    font-size: 12.5px; letter-spacing: .4em; color: var(--ink-soft);
+    cursor: pointer; z-index: 6;
+  }
+  #pause span { padding-left: .4em; }
+
+  /* ---------- HUD ---------- */
+  #hud {
+    position: fixed; inset: 0; z-index: 4; pointer-events: none;
+    opacity: 0; transition: opacity 1.6s ease;
+  }
+  body.started #hud { opacity: 1; }
+  body.clean #hud { opacity: 0; }
+
+  .mark {
+    position: absolute; top: 28px; left: 32px;
+    display: flex; align-items: baseline; gap: 11px;
+    padding: 10px 17px 10px 19px;
+    background: var(--paper);
+    border: 1px solid rgba(255, 255, 255, .5);
+    border-radius: 999px;
+    box-shadow: 0 10px 32px rgba(62, 64, 34, .10);
+    backdrop-filter: blur(9px);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 12.5px; letter-spacing: .30em;
+    color: #41472c;
+  }
+  .mark span {
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 9.5px; letter-spacing: .24em; color: rgba(65, 71, 44, .48);
+  }
+
+  .clock {
+    position: absolute; top: 28px; right: 32px;
+    padding: 10px 17px;
+    background: var(--paper);
+    border: 1px solid rgba(255, 255, 255, .5);
+    border-radius: 999px;
+    box-shadow: 0 10px 32px rgba(62, 64, 34, .10);
+    backdrop-filter: blur(9px);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 11.5px; letter-spacing: .2em;
+    color: #41472c;
+    white-space: nowrap;
+  }
+
+  .place {
+    position: absolute; top: 14vh; left: 50%; transform: translateX(-50%);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: clamp(15px, 1.7vw, 21px);
+    letter-spacing: .5em; padding: 8px 20px 8px 25px;
+    white-space: nowrap;
+    color: #4a5131;
+    background: rgba(253, 250, 238, .68);
+    border: 1px solid rgba(255, 255, 255, .45);
+    border-radius: 999px;
+    box-shadow: 0 8px 30px rgba(60, 62, 32, .10);
+    backdrop-filter: blur(8px);
+    opacity: 0; transition: opacity 2s ease;
+  }
+  .place.on { opacity: 1; }
+
+  /* 种子栏 */
+  .seeds {
+    position: absolute; left: 32px; bottom: 30px;
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 13px 9px 15px;
+    background: var(--paper);
+    border: 1px solid rgba(255, 255, 255, .5);
+    border-radius: 16px;
+    box-shadow: 0 12px 34px rgba(58, 60, 30, .12);
+    backdrop-filter: blur(10px);
+    transition: opacity 1.6s ease;
+  }
+  .seeds .label {
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 10.5px; letter-spacing: .24em; color: rgba(59, 58, 40, .52);
+    margin-right: 3px;
+  }
+  .seed {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 11px 7px 10px;
+    border-radius: 999px;
+    font-size: 11px; letter-spacing: .08em;
+    color: #5a5940;
+    border: 1px solid transparent;
+    transition: background .35s ease, color .35s ease, border-color .35s ease, transform .35s ease;
+  }
+  .seed i {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--c);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, .55);
+    font-style: normal;
+  }
+  .seed b {
+    font-weight: 500; font-size: 9.5px; opacity: .5; margin-right: 1px;
+  }
+  .seed.on {
+    background: #55602f; color: #fbf8e9;
+    border-color: rgba(58, 66, 30, .4);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(60, 70, 30, .2);
+  }
+  .seed.on b { opacity: .62; }
+
+  /* 库存 */
+  .stock {
+    position: absolute; right: 32px; bottom: 30px;
+    display: flex; flex-direction: column; align-items: stretch; gap: 5px;
+    padding: 11px 16px;
+    background: var(--paper);
+    border: 1px solid rgba(255, 255, 255, .5);
+    border-radius: 16px;
+    box-shadow: 0 12px 34px rgba(58, 60, 30, .12);
+    backdrop-filter: blur(10px);
+    transition: opacity 1.6s ease;
+  }
+  .stock-row { display: flex; align-items: center; gap: 13px; }
+  .stock-row.storage-row {
+    border-top: 1px solid rgba(92, 82, 52, .18);
+    padding-top: 5px;
+  }
+  .stock .label {
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 10.5px; letter-spacing: .24em; color: rgba(59, 58, 40, .52);
+    margin-right: 2px;
+  }
+  .stock .item {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; letter-spacing: .06em; color: #56543c;
+  }
+  .stock .item i {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--c);
+    box-shadow: inset 0 -2px 3px rgba(0, 0, 0, .16), 0 0 0 2px rgba(255, 255, 255, .5);
+    font-style: normal;
+  }
+  .stock .item em {
+    font-style: normal; font-weight: 600; font-size: 12px;
+    color: #3f452b; min-width: 12px; text-align: right;
+  }
+  .stock.bump { animation: stockBump .38s ease; }
+  @keyframes stockBump {
+    0% { transform: scale(1); }
+    35% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+  }
+
+  .keys {
+    position: absolute; bottom: 116px; left: 50%; transform: translateX(-50%);
+    font-size: 10.5px; letter-spacing: .14em; white-space: nowrap;
+    color: rgba(255, 253, 242, .92);
+    text-shadow: 0 1px 3px rgba(38, 42, 18, .55), 0 0 18px rgba(38, 42, 18, .45);
+    transition: opacity 1.8s ease;
+  }
+  .keys.dim { opacity: 0; }
+
+  /* 交互提示 */
+  .prompt {
+    position: absolute; left: 50%; bottom: 142px; transform: translate(-50%, 6px);
+    display: flex; align-items: center; gap: 11px;
+    padding: 10px 18px 10px 12px;
+    background: var(--paper-strong);
+    border: 1px solid rgba(255, 255, 255, .55);
+    border-radius: 999px;
+    box-shadow: 0 14px 38px rgba(52, 56, 24, .16);
+    backdrop-filter: blur(10px);
+    font-size: 12.5px; letter-spacing: .08em; color: #434a2c;
+    opacity: 0; pointer-events: none;
+    transition: opacity .32s ease, transform .32s ease;
+    white-space: nowrap;
+  }
+  .prompt.on { opacity: 1; transform: translate(-50%, 0); }
+  .prompt .key {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 27px; height: 27px; padding: 0 8px;
+    background: #55602f; color: #fdfaec;
+    border-radius: 8px;
+    font-size: 12px; font-weight: 600; letter-spacing: .02em;
+    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .18), 0 3px 8px rgba(50, 60, 24, .22);
+  }
+  .prompt .sub {
+    font-size: 10px; letter-spacing: .1em; color: rgba(67, 74, 44, .55);
+    margin-left: 2px;
+  }
+  .prompt .bar {
+    width: 76px; height: 4px; border-radius: 999px;
+    background: rgba(85, 96, 47, .16); overflow: hidden;
+  }
+  .prompt .bar i {
+    display: block; height: 100%; border-radius: 999px;
+    background: #7c8b45; width: 0%;
+    transition: width .28s linear;
+  }
+
+  /* 飘字 */
+  .toast {
+    position: absolute; left: 50%; bottom: 198px; transform: translate(-50%, 8px);
+    padding: 8px 17px;
+    background: rgba(74, 82, 42, .86);
+    color: #fbf8e9;
+    border-radius: 999px;
+    font-size: 12px; letter-spacing: .12em;
+    box-shadow: 0 10px 26px rgba(44, 50, 20, .22);
+    opacity: 0; pointer-events: none;
+    transition: opacity .45s ease, transform .45s ease;
+    white-space: nowrap;
+  }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+  #dot {
+    position: fixed; left: 50%; top: 50%; z-index: 3;
+    width: 4px; height: 4px; margin: -2px 0 0 -2px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, .55);
+    box-shadow: 0 0 0 1px rgba(50, 56, 26, .18);
+    opacity: 0; transition: opacity 1.4s ease;
+    pointer-events: none;
+  }
+  body.started #dot { opacity: .8; }
+  body.clean #dot { opacity: 0; }
+
+  #fade {
+    position: fixed; inset: 0; z-index: 9; pointer-events: none;
+    background: #faf6e7; opacity: 0;
+  }
+
+  @media (max-width: 860px) {
+    .keys { display: none; }
+    .seeds { left: 18px; bottom: 18px; }
+    .stock { right: 18px; bottom: 18px; }
+    .mark { left: 18px; top: 18px; }
+    .clock { right: 18px; top: 18px; }
+    .stock .label { display: none; }
+  }
+  @media (max-width: 720px) {
+    .stock { display: none; }
+    .clock { font-size: 10.5px; padding: 8px 12px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene" tabindex="0"></canvas>
+<div id="grade"></div>
+<div id="dot"></div>
+
+<div id="intro" class="layer">
+  <div class="intro-inner">
+    <div class="eyebrow">一片草原</div>
+    <h1>草 原</h1>
+    <p class="sub">风把草压低，又放开<br>羊在吃草，夜里会有萤火虫</p>
+    <button id="enter">走进去</button>
+    <div class="scenes" role="group" aria-label="切换场景">
+      <span class="scene-label">场景</span>
+      <button class="scene" data-scene="wild">原野</button>
+      <button class="scene on" data-scene="grass" aria-current="true">草原</button>
+    </div>
+    <div class="tip">鼠标看 · WASD 走 · 点击作物收获 · 靠近按 E 互动</div>
+  </div>
+</div>
+
+<div id="pause" class="layer hidden"><span>点击，继续走</span></div>
+
+<div id="hud">
+  <div class="mark">理想的世界<span>草原</span></div>
+  <div class="clock" id="time">16:24 · 午后</div>
+  <div class="place" id="place"></div>
+
+  <div class="seeds" id="seeds">
+    <span class="label">种子</span>
+    <span class="seed on" data-k="0"><i style="--c:#e07a2f"></i><b>1</b>胡萝卜</span>
+    <span class="seed" data-k="1"><i style="--c:#d8b45c"></i><b>2</b>小麦</span>
+    <span class="seed" data-k="2"><i style="--c:#d24b39"></i><b>3</b>番茄</span>
+  </div>
+
+  <div class="stock" id="stock">
+    <div class="stock-row">
+      <span class="label">背包</span>
+      <span class="item"><i style="--c:#e07a2f"></i>胡萝卜 <em id="c0">0</em></span>
+      <span class="item"><i style="--c:#d8b45c"></i>小麦 <em id="c1">0</em></span>
+      <span class="item"><i style="--c:#d24b39"></i>番茄 <em id="c2">0</em></span>
+    </div>
+    <div class="stock-row storage-row">
+      <span class="label">粮仓</span>
+      <span class="item"><i style="--c:#e07a2f"></i>胡萝卜 <em id="s0">0</em></span>
+      <span class="item"><i style="--c:#d8b45c"></i>小麦 <em id="s1">0</em></span>
+      <span class="item"><i style="--c:#d24b39"></i>番茄 <em id="s2">0</em></span>
+    </div>
+  </div>
+
+  <div class="prompt" id="prompt"></div>
+  <div class="toast" id="toast"></div>
+  <div class="keys" id="keys">WASD 走 · 移动鼠标看 · 点击作物收获 · 1/2/3 选种 · E 互动 · T 换时辰 · M 声音 · H 净屏</div>
+</div>
+
+<div id="fade"></div>
+<script>
+/* 场景切换：本地双击用中文文件名，线上用 index.html */
+(function () {
+  const LINKS = location.protocol === 'file:'
+    ? { wild: '理想的世界.html', grass: '草原.html' }
+    : { wild: './', grass: './grassland.html' };
+  const CURRENT = 'grass';
+  const fade = document.getElementById('fade');
+  document.querySelectorAll('.scene[data-scene]').forEach((btn) => {
+    const key = btn.dataset.scene;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (key === CURRENT) return;
+      fade.style.transition = 'opacity .6s ease';
+      fade.style.opacity = '1';
+      setTimeout(() => { location.href = LINKS[key]; }, 620);
+    });
+  });
+})();
+</script>
+<script>/*__BUNDLE__*/</script>
+</body>
+</html>

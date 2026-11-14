@@ -1,0 +1,24 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 单文件产物（由 npm run build 生成）
+理想的世界.html
+草原.html
+
+# 调试截图
+*.png
+!docs/*.png
+
+# WorkBuddy 工作区数据
+.workbuddy/
+.screenshots/
+*.genie
+
+# 本地预览目录
+预览/
+
+# 备份与临时文件
+*.bak
+*.bak2
+*.tmp

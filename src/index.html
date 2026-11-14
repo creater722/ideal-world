@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>理想的世界</title>
+<style>
+  :root {
+    --ink: #f6f1e2;
+    --ink-dim: rgba(246, 241, 226, .60);
+    --line: rgba(246, 241, 226, .26);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #0d100b; overflow: hidden;
+    color: var(--ink);
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  canvas#scene {
+    position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+  }
+  body.playing { cursor: none; }
+
+  /* 空气感：暖光溢出 + 暗角，与后处理叠加但不喧宾夺主 */
+  #grade {
+    position: fixed; inset: 0; pointer-events: none; z-index: 2;
+    background:
+      radial-gradient(88% 68% at 74% 6%, rgba(255, 236, 186, .10), rgba(255, 236, 186, 0) 62%),
+      radial-gradient(128% 108% at 50% 48%, rgba(0, 0, 0, 0) 46%, rgba(16, 20, 12, .30) 100%);
+    mix-blend-mode: multiply;
+  }
+
+  .layer {
+    position: fixed; inset: 0; z-index: 5;
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 1.2s ease;
+  }
+  .hidden { display: none !important; }
+
+  /* 开场 */
+  #intro {
+    background:
+      radial-gradient(120% 100% at 50% 112%, rgba(10, 14, 9, .84), rgba(10, 14, 9, .28) 58%),
+      linear-gradient(180deg, rgba(7, 10, 6, .60), rgba(7, 10, 6, .22) 40%, rgba(7, 10, 6, .78));
+  }
+  #intro.dismiss { opacity: 0; pointer-events: none; }
+  .intro-inner { text-align: center; padding: 0 28px; transform: translateY(-1.5vh); }
+
+  .eyebrow {
+    font-size: 11px; letter-spacing: .66em; padding-left: .66em;
+    color: var(--ink-dim); margin-bottom: 34px;
+    animation: rise 2.4s ease both;
+  }
+  h1 {
+    margin: 0; font-weight: 400;
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: clamp(40px, 7.2vw, 88px);
+    letter-spacing: .32em; padding-left: .32em;
+    text-shadow: 0 2px 46px rgba(255, 240, 200, .18), 0 1px 2px rgba(0, 0, 0, .3);
+    animation: rise 2.8s .1s ease both;
+  }
+  .sub {
+    margin: 32px 0 0; font-size: clamp(12.5px, 1.3vw, 15px);
+    line-height: 2.2; letter-spacing: .24em; padding-left: .24em;
+    color: rgba(246, 241, 226, .74);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    animation: rise 3.2s .2s ease both;
+  }
+  #enter {
+    margin-top: 48px; padding: 15px 44px 15px 48px;
+    background: rgba(255, 249, 234, .06);
+    border: 1px solid var(--line); border-radius: 999px;
+    color: var(--ink); font-size: 13.5px; letter-spacing: .48em;
+    font-family: inherit; cursor: pointer;
+    backdrop-filter: blur(8px);
+    transition: background .55s ease, border-color .55s ease, transform .55s ease;
+    animation: rise 3.4s .3s ease both;
+  }
+  #enter:hover { background: rgba(255, 249, 234, .16); border-color: rgba(246, 241, 226, .56); transform: translateY(-1px); }
+
+  /* 场景切换 */
+  .scenes {
+    margin-top: 26px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    animation: rise 3.5s .38s ease both;
+  }
+  .scene-label {
+    font-size: 10px; letter-spacing: .3em; padding-left: .3em;
+    color: rgba(246, 241, 226, .34);
+    margin-right: 4px;
+  }
+  .scene {
+    padding: 8px 18px 8px calc(18px + .3em);
+    border: 1px solid rgba(246, 241, 226, .2);
+    border-radius: 999px;
+    background: transparent;
+    color: rgba(246, 241, 226, .6);
+    font-family: inherit; font-size: 11.5px; letter-spacing: .3em;
+    cursor: pointer;
+    transition: background .45s ease, color .45s ease, border-color .45s ease;
+  }
+  .scene:hover {
+    color: var(--ink);
+    border-color: rgba(246, 241, 226, .48);
+    background: rgba(255, 249, 234, .08);
+  }
+  .scene.on {
+    background: rgba(246, 241, 226, .84);
+    color: #161a12;
+    border-color: rgba(246, 241, 226, .84);
+    cursor: default;
+  }
+
+  .tip {
+    margin-top: 24px; font-size: 10.5px; letter-spacing: .24em;
+    color: rgba(246, 241, 226, .34);
+    animation: rise 3.6s .4s ease both;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* 暂停 */
+  #pause {
+    background: rgba(9, 12, 8, .3);
+    backdrop-filter: blur(8px);
+    font-size: 12.5px; letter-spacing: .4em; color: var(--ink-dim);
+    cursor: pointer; z-index: 6;
+  }
+  #pause span { padding-left: .4em; }
+
+  /* HUD */
+  #hud { position: fixed; inset: 0; z-index: 4; pointer-events: none; opacity: 0; transition: opacity 1.6s ease; }
+  body.started #hud { opacity: 1; }
+  body.clean #hud { opacity: 0; }
+  .mark {
+    position: absolute; top: 30px; left: 34px;
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 12.5px; letter-spacing: .32em;
+    color: rgba(246, 241, 226, .52);
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  .mark span { font-size: 9.5px; letter-spacing: .26em; color: rgba(246, 241, 226, .3); }
+
+  .clock {
+    position: absolute; top: 30px; right: 36px;
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 11.5px; letter-spacing: .22em;
+    color: rgba(246, 241, 226, .5);
+    text-shadow: 0 1px 10px rgba(12, 20, 6, .34);
+  }
+
+  /* 走到某处，地名浮一下 */
+  .place {
+    position: absolute; top: 15vh; left: 50%; transform: translateX(-50%);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: clamp(15px, 1.7vw, 21px);
+    letter-spacing: .5em; padding-left: .5em; white-space: nowrap;
+    color: rgba(255, 250, 235, .82);
+    text-shadow: 0 2px 30px rgba(0, 0, 0, .5);
+    opacity: 0; transition: opacity 2.2s ease;
+  }
+  .place.on { opacity: 1; }
+
+  .keys {
+    position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%);
+    font-size: 10.5px; letter-spacing: .17em; white-space: nowrap;
+    color: rgba(255, 252, 240, .58);
+    text-shadow: 0 1px 10px rgba(12, 20, 6, .7), 0 0 2px rgba(12, 20, 6, .5);
+    transition: opacity 1.8s ease;
+  }
+  .keys.dim { opacity: 0; }
+
+  .whisper {
+    position: absolute; bottom: 76px; left: 50%; transform: translateX(-50%);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: clamp(12.5px, 1.28vw, 15.5px);
+    letter-spacing: .23em; padding-left: .23em; white-space: nowrap;
+    color: rgba(255, 248, 230, .76);
+    text-shadow: 0 2px 26px rgba(0, 0, 0, .5);
+    opacity: 0; transition: opacity 2s ease;
+  }
+  .whisper.on { opacity: 1; }
+
+  #fade {
+    position: fixed; inset: 0; z-index: 9; pointer-events: none;
+    background: #faf5e6; opacity: 0;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="grade"></div>
+
+<div id="intro" class="layer">
+  <div class="intro-inner">
+    <div class="eyebrow">一片原野</div>
+    <h1>理想的世界</h1>
+    <p class="sub">这里没有任务，也没有尽头<br>风穿过草，湖在那边，门是开着的</p>
+    <button id="enter">走进去</button>
+    <div class="scenes" role="group" aria-label="切换场景">
+      <span class="scene-label">场景</span>
+      <button class="scene on" data-scene="wild" aria-current="true">原野</button>
+      <button class="scene" data-scene="grass">草原</button>
+    </div>
+    <div class="tip">戴耳机 · 全屏 · 慢一点</div>
+  </div>
+</div>
+
+<div id="pause" class="layer hidden"><span>点击，继续走</span></div>
+
+<div id="hud">
+  <div class="mark">理想的世界<span>原野</span></div>
+  <div class="clock" id="clock">16:36 · 午后</div>
+  <div class="place" id="place"></div>
+  <div class="whisper" id="whisper"></div>
+  <div class="keys" id="keys">W A S D 走 · Shift 快走 · F 躺下 · T 换时辰 · M 声音 · H 净屏 · Esc 松手</div>
+</div>
+
+<div id="fade"></div>
+<script>
+/* 场景切换：本地双击用中文文件名，线上用 grassland.html */
+(function () {
+  const LINKS = location.protocol === 'file:'
+    ? { wild: '理想的世界.html', grass: '草原.html' }
+    : { wild: './', grass: './grassland.html' };
+  const CURRENT = 'wild';
+  const fade = document.getElementById('fade');
+  document.querySelectorAll('.scene[data-scene]').forEach((btn) => {
+    const key = btn.dataset.scene;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (key === CURRENT) return;
+      fade.style.transition = 'opacity .6s ease';
+      fade.style.opacity = '1';
+      setTimeout(() => { location.href = LINKS[key]; }, 620);
+    });
+  });
+})();
+</script>
+<script>/*__BUNDLE__*/</script>
+</body>
+</html>
