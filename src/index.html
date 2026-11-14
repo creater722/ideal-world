@@ -124,14 +124,126 @@
     to { opacity: 1; transform: translateY(0); }
   }
 
-  /* 暂停 */
+  /* 暂停 / 设置菜单 */
   #pause {
-    background: rgba(9, 12, 8, .3);
-    backdrop-filter: blur(8px);
-    font-size: 12.5px; letter-spacing: .4em; color: var(--ink-dim);
-    cursor: pointer; z-index: 6;
+    background: rgba(9, 12, 8, .28);
+    backdrop-filter: blur(9px) saturate(.92);
+    z-index: 7;
+    opacity: 0;
+    transition: opacity .34s ease;
   }
-  #pause span { padding-left: .4em; }
+  #pause.show { opacity: 1; }
+
+  .menu {
+    width: min(348px, 86vw);
+    padding: 30px 26px 22px;
+    border: 1px solid rgba(246, 241, 226, .16);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(21, 25, 18, .74), rgba(11, 14, 9, .84));
+    box-shadow: 0 26px 70px rgba(0, 0, 0, .55);
+    text-align: center;
+  }
+  .menu-title {
+    font-family: "Songti SC", "STSong", "Noto Serif SC", serif;
+    font-size: 20px; letter-spacing: .36em; padding-left: .36em;
+    color: var(--ink); margin-bottom: 7px;
+  }
+  .menu-sub {
+    font-size: 10.5px; letter-spacing: .2em; padding-left: .2em;
+    color: rgba(246, 241, 226, .34); margin-bottom: 24px;
+  }
+  .menu-btn {
+    display: flex; align-items: center; justify-content: space-between;
+    width: 100%; padding: 13px 16px 13px 18px; margin-bottom: 9px;
+    border: 1px solid rgba(246, 241, 226, .14);
+    border-radius: 9px;
+    background: rgba(255, 252, 240, .03);
+    color: rgba(246, 241, 226, .86);
+    font-family: inherit; font-size: 12.5px; letter-spacing: .2em;
+    cursor: pointer;
+    transition: background .28s ease, border-color .28s ease, color .28s ease;
+  }
+  .menu-btn:hover {
+    background: rgba(255, 252, 240, .09);
+    border-color: rgba(246, 241, 226, .34);
+    color: #fff;
+  }
+  .menu-btn .hint {
+    font-size: 9.5px; letter-spacing: .12em;
+    color: rgba(246, 241, 226, .32);
+  }
+  .menu-btn.primary {
+    background: rgba(246, 241, 226, .86);
+    color: #161a12; border-color: transparent;
+  }
+  .menu-btn.primary:hover { background: #f6f1e2; }
+  .menu-btn.primary .hint { color: rgba(22, 26, 18, .5); }
+
+  .panel { display: none; }
+  .panel.on { display: block; }
+  .panel-back {
+    margin-top: 6px; padding: 9px;
+    background: none; border: none;
+    color: rgba(246, 241, 226, .38);
+    font-family: inherit; font-size: 11px; letter-spacing: .2em;
+    cursor: pointer; transition: color .24s ease;
+  }
+  .panel-back:hover { color: var(--ink); }
+
+  /* 世界列表 */
+  .world-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; margin-bottom: 9px; text-align: left;
+    border: 1px solid rgba(246, 241, 226, .14); border-radius: 9px;
+    cursor: pointer;
+    transition: border-color .28s ease, background .28s ease;
+  }
+  .world-item:hover { border-color: rgba(246, 241, 226, .4); background: rgba(255, 252, 240, .06); }
+  .world-item.cur {
+    border-color: rgba(246, 241, 226, .46);
+    background: rgba(246, 241, 226, .09);
+    cursor: default;
+  }
+  .world-name { font-size: 13px; letter-spacing: .2em; }
+  .world-desc { font-size: 10px; letter-spacing: .1em; color: rgba(246, 241, 226, .36); margin-top: 4px; }
+  .world-tag { font-size: 9.5px; letter-spacing: .16em; color: rgba(246, 241, 226, .42); }
+
+  /* 键位绑定 */
+  .bind-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 3px;
+    border-bottom: 1px solid rgba(246, 241, 226, .07);
+  }
+  .bind-label { font-size: 12px; letter-spacing: .18em; color: rgba(246, 241, 226, .7); }
+  .bind-key {
+    min-width: 96px; padding: 7px 12px;
+    border: 1px solid rgba(246, 241, 226, .2); border-radius: 7px;
+    background: rgba(255, 252, 240, .04);
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 11.5px; letter-spacing: .06em; color: var(--ink);
+    cursor: pointer;
+    transition: border-color .24s ease, background .24s ease, color .24s ease;
+  }
+  .bind-key:hover { border-color: rgba(246, 241, 226, .44); background: rgba(255, 252, 240, .09); }
+  .bind-key.listening {
+    border-color: #f0d9a8; color: #f0d9a8;
+    animation: waitPulse 1.1s ease-in-out infinite;
+  }
+  @keyframes waitPulse { 0%, 100% { opacity: 1; } 50% { opacity: .42; } }
+
+  /* 底部提示条 */
+  .toast {
+    position: fixed; left: 50%; bottom: 12vh; transform: translateX(-50%) translateY(10px);
+    padding: 11px 22px; z-index: 9;
+    border: 1px solid rgba(246, 241, 226, .16); border-radius: 999px;
+    background: rgba(14, 18, 12, .84);
+    backdrop-filter: blur(10px);
+    font-size: 11.5px; letter-spacing: .18em;
+    color: rgba(246, 241, 226, .8);
+    opacity: 0; pointer-events: none;
+    transition: opacity .34s ease, transform .34s ease;
+  }
+  .toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 
   /* HUD */
   #hud { position: fixed; inset: 0; z-index: 4; pointer-events: none; opacity: 0; transition: opacity 1.6s ease; }
@@ -211,7 +323,43 @@
   </div>
 </div>
 
-<div id="pause" class="layer hidden"><span>点击，继续走</span></div>
+<div id="pause" class="layer hidden">
+  <div class="menu">
+    <div class="menu-title">暂停</div>
+    <div class="menu-sub">按 Esc 回到这里</div>
+
+    <div class="panel on" id="panel-main">
+      <button class="menu-btn primary" id="btn-resume">继续游戏</button>
+      <button class="menu-btn" id="btn-world">切换世界<span class="hint">原野 / 草原</span></button>
+      <button class="menu-btn" id="btn-keys">按键设置</button>
+      <button class="menu-btn" id="btn-save">保存游戏<span class="hint">开发中</span></button>
+      <button class="menu-btn" id="btn-quit">退出游戏</button>
+    </div>
+
+    <div class="panel" id="panel-world">
+      <div class="world-item cur">
+        <div><div class="world-name">原野</div><div class="world-desc">湖、木屋、黄昏与星空</div></div>
+        <div class="world-tag">当前</div>
+      </div>
+      <div class="world-item" id="goto-grass">
+        <div><div class="world-name">草原</div><div class="world-desc">农庄、牲畜、漫长的白天</div></div>
+        <div class="world-tag">前往 →</div>
+      </div>
+      <button class="panel-back" data-back>← 返回</button>
+    </div>
+
+    <div class="panel" id="panel-keys">
+      <div class="bind-row"><span class="bind-label">前进</span><button class="bind-key" data-bind="forward">W</button></div>
+      <div class="bind-row"><span class="bind-label">后退</span><button class="bind-key" data-bind="back">S</button></div>
+      <div class="bind-row"><span class="bind-label">左移</span><button class="bind-key" data-bind="left">A</button></div>
+      <div class="bind-row"><span class="bind-label">右移</span><button class="bind-key" data-bind="right">D</button></div>
+      <div class="bind-row"><span class="bind-label">快走</span><button class="bind-key" data-bind="run">Shift</button></div>
+      <button class="panel-back" data-back>← 返回</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
 
 <div id="hud">
   <div class="mark">理想的世界<span>原野</span></div>

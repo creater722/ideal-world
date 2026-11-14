@@ -1923,13 +1923,187 @@ let paused = false;
 let dragMode = false;
 let dragging = false;
 const held = new Set();
+const toastEl = document.getElementById('toast');
+
+/* ---- 键位：可自定义，存 localStorage ---- */
+const BIND_STORE = 'iw.binds.v1';
+const DEFAULT_BINDS = {
+  forward: 'KeyW',
+  back: 'KeyS',
+  left: 'KeyA',
+  right: 'KeyD',
+  run: 'ShiftLeft',
+};
+const BIND_LABELS = {
+  forward: '前进', back: '后退', left: '左移', right: '右移', run: '快走',
+};
+const binds = { ...DEFAULT_BINDS };
+try {
+  const saved = JSON.parse(localStorage.getItem(BIND_STORE) || '{}');
+  for (const k of Object.keys(DEFAULT_BINDS)) {
+    if (typeof saved[k] === 'string' && saved[k]) binds[k] = saved[k];
+  }
+} catch (e) { /* 隐私模式等情况下忽略 */ }
+
+function persistBinds() {
+  try { localStorage.setItem(BIND_STORE, JSON.stringify(binds)); } catch (e) { /* 忽略 */ }
+}
+
+/* 把 KeyboardEvent.code 变成好看的标签 */
+function codeLabel(code) {
+  if (!code) return '—';
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  const special = {
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    ShiftLeft: 'Shift', ShiftRight: 'Shift',
+    ControlLeft: 'Ctrl', ControlRight: 'Ctrl',
+    AltLeft: 'Alt', AltRight: 'Alt',
+    Space: '空格', Tab: 'Tab', CapsLock: 'Caps',
+    Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/',
+    BracketLeft: '[', BracketRight: ']', Backslash: '\\', Minus: '-', Equal: '=',
+  };
+  return special[code] || code;
+}
+
+function refreshKeyHint() {
+  const b = binds;
+  keysEl.textContent =
+    `${codeLabel(b.forward)} ${codeLabel(b.left)} ${codeLabel(b.back)} ${codeLabel(b.right)} 走` +
+    ` · ${codeLabel(b.run)} 快走 · F 躺下 · T 换时辰 · M 声音 · H 净屏 · Esc 菜单`;
+}
+
+let toastTimer = 0;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('on'), 2400);
+}
+
+/* ---- 面板切换 ---- */
+function showPanel(name) {
+  document.querySelectorAll('.panel').forEach((p) => p.classList.remove('on'));
+  const el = document.getElementById('panel-' + name);
+  if (el) el.classList.add('on');
+}
+
+/* ---- 菜单开关 ---- */
+function openMenu() {
+  if (!started) return;
+  paused = true;
+  held.clear();
+  body.classList.remove('playing');
+  pauseEl.classList.remove('hidden');
+  void pauseEl.offsetHeight;   // 强制一次 reflow，否则 opacity 过渡不触发
+  pauseEl.classList.add('show');
+  showPanel('main');
+}
+
+function closeMenu() {
+  pauseEl.classList.remove('show');
+  paused = false;
+  setTimeout(() => {
+    if (!paused) pauseEl.classList.add('hidden');
+  }, 340);
+}
+
+function quitToTitle() {
+  started = false;
+  paused = false;
+  dragMode = false;
+  held.clear();
+  if (document.pointerLockElement === canvas) document.exitPointerLock();
+  pauseEl.classList.remove('show');
+  pauseEl.classList.add('hidden');
+  body.classList.remove('playing', 'started');
+  introEl.classList.remove('dismiss', 'hidden');
+  showPanel('main');
+}
+
+/* ---- 菜单按钮 ---- */
+document.getElementById('btn-resume').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenu();
+  tryLock();
+});
+
+document.getElementById('btn-world').addEventListener('click', (e) => {
+  e.stopPropagation();
+  showPanel('world');
+});
+
+document.getElementById('btn-keys').addEventListener('click', (e) => {
+  e.stopPropagation();
+  refreshBindButtons();
+  showPanel('keys');
+});
+
+document.getElementById('btn-save').addEventListener('click', (e) => {
+  e.stopPropagation();
+  toast('存档还在开发中，这个世界不需要你保存');
+});
+
+document.getElementById('btn-quit').addEventListener('click', (e) => {
+  e.stopPropagation();
+  quitToTitle();
+});
+
+document.querySelectorAll('[data-back]').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showPanel('main');
+  });
+});
+
+document.getElementById('goto-grass').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const target = location.protocol === 'file:' ? '草原.html' : './grassland.html';
+  pauseEl.classList.remove('show');
+  fadeEl.style.transition = 'opacity .55s ease';
+  fadeEl.style.opacity = '1';
+  setTimeout(() => { location.href = target; }, 580);
+});
+
+/* ---- 按键绑定 ---- */
+let listening = null;
+
+function refreshBindButtons() {
+  document.querySelectorAll('.bind-key').forEach((btn) => {
+    if (listening && listening.btn === btn) return;
+    btn.textContent = codeLabel(binds[btn.dataset.bind]);
+  });
+}
+
+document.querySelectorAll('.bind-key').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (listening) {
+      listening.btn.classList.remove('listening');
+      listening.btn.textContent = codeLabel(binds[listening.action]);
+    }
+    if (listening && listening.btn === btn) { listening = null; return; }
+    listening = { btn, action: btn.dataset.bind };
+    btn.classList.add('listening');
+    btn.textContent = '按下新键…';
+  });
+});
+
+/* 返回上一步：把监听中的按钮恢复 */
+function cancelListening() {
+  if (!listening) return;
+  listening.btn.classList.remove('listening');
+  listening.btn.textContent = codeLabel(binds[listening.action]);
+  listening = null;
+}
 
 function startGame() {
   if (started) return;
   started = true;
   body.classList.add('playing', 'started');
   introEl.classList.add('dismiss');
-  setTimeout(() => introEl.classList.add('hidden'), 1500);
+  setTimeout(() => { if (started) introEl.classList.add('hidden'); }, 1500);
+  refreshKeyHint();
   fadeEl.style.transition = 'none';
   fadeEl.style.opacity = '0.95';
   requestAnimationFrame(() => {
@@ -1962,28 +2136,23 @@ function enableDragMode() {
   dragMode = true;
   paused = false;
   pauseEl.classList.add('hidden');
+  pauseEl.classList.remove('show');
   body.classList.remove('playing');
+  if (started) toast('鼠标没能锁住：按住左键拖动画面也能走');
 }
 
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement === canvas) {
-    paused = false;
-    pauseEl.classList.add('hidden');
+    closeMenu();
     body.classList.add('playing');
   } else if (started && !dragMode) {
-    paused = true;
-    body.classList.remove('playing');
-    pauseEl.classList.remove('hidden');
+    // 浏览器在指针锁定下会吞掉 Esc 的 keydown，所以「按 Esc 弹菜单」
+    // 实际上是从这里触发的：解锁 == 想停下
+    openMenu();
   }
 });
 
 document.addEventListener('pointerlockerror', () => enableDragMode());
-
-pauseEl.addEventListener('click', () => {
-  pauseEl.classList.add('hidden');
-  paused = false;
-  tryLock();
-});
 
 document.getElementById('enter').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -2008,11 +2177,43 @@ canvas.addEventListener('mousemove', (e) => {
 
 window.addEventListener('keydown', (e) => {
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
-  held.add(e.code);
+
+  // 按键设置：等待玩家按下新键
+  if (listening) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.code === 'Escape') { cancelListening(); return; }
+    const action = listening.action;
+    const oldKey = binds[action];
+    const occupied = Object.keys(binds).find((k) => k !== action && binds[k] === e.code);
+    if (occupied) {
+      binds[occupied] = oldKey;      // 撞键就互换，不让两个动作共用一个键
+      toast(`${codeLabel(e.code)} 原本是「${BIND_LABELS[occupied]}」，已与「${BIND_LABELS[action]}」互换`);
+    } else {
+      toast(`「${BIND_LABELS[action]}」改为 ${codeLabel(e.code)}`);
+    }
+    binds[action] = e.code;
+    persistBinds();
+    cancelListening();
+    refreshBindButtons();
+    refreshKeyHint();
+    return;
+  }
+
   if (!started) {
     if (e.code === 'Enter') startGame();
     return;
   }
+
+  // Esc：开/关菜单（指针锁定状态下浏览器会自己解锁，走 pointerlockchange）
+  if (e.code === 'Escape') {
+    if (paused) { closeMenu(); tryLock(); } else { openMenu(); }
+    return;
+  }
+
+  if (paused) return;
+
+  held.add(e.code);
   if (e.code === 'KeyF') toggleLie();
   if (e.code === 'KeyT') skipTime();
   if (e.code === 'KeyM') toggleMute();
@@ -2371,15 +2572,16 @@ function updatePlayer(t, dt) {
   let ix = 0;
   let iz = 0;
   if (!paused) {
-    if (held.has('KeyW') || held.has('ArrowUp')) iz -= 1;
-    if (held.has('KeyS') || held.has('ArrowDown')) iz += 1;
-    if (held.has('KeyA') || held.has('ArrowLeft')) ix -= 1;
-    if (held.has('KeyD') || held.has('ArrowRight')) ix += 1;
+    // 用自定义键位；方向键始终可用，作为兜底
+    if (held.has(binds.forward) || held.has('ArrowUp')) iz -= 1;
+    if (held.has(binds.back) || held.has('ArrowDown')) iz += 1;
+    if (held.has(binds.left) || held.has('ArrowLeft')) ix -= 1;
+    if (held.has(binds.right) || held.has('ArrowRight')) ix += 1;
   }
 
   if (lying && (ix || iz)) lying = false;
 
-  const run = held.has('ShiftLeft') || held.has('ShiftRight');
+  const run = held.has(binds.run) || held.has('ShiftRight');
   const maxSpeed = lying ? 0 : run ? 4.0 : 2.0;
 
   const len = Math.hypot(ix, iz) || 1;
@@ -2572,8 +2774,7 @@ rebuildEnv();
 requestAnimationFrame(animate);
 
 // 调试用：?still 直接站进世界，跳过开场与 HUD
-if (new URLSearchParams(location.search).has('still')) {
-  started = true;
+if (new URLSearchParams(location.search).has('still')) {  started = true;
   body.classList.add('started', 'clean');
   introEl.classList.add('hidden');
   const p = new URLSearchParams(location.search);
@@ -2585,6 +2786,11 @@ if (new URLSearchParams(location.search).has('still')) {
   applyTime();
   camY = places.floorAt(player.x, player.z).y + EYE;
   if (p.has('f1')) camY = places.cabin.floorY + EYE;
+  // 调试用：?menu 直接打开设置菜单，?panel=keys|world 直达子面板
+  if (p.has('menu')) {
+    setTimeout(() => openMenu(), 900);
+    if (p.has('panel')) setTimeout(() => showPanel(p.get('panel')), 1200);
+  }
   if (p.has('probe')) {
     setTimeout(() => {
       document.title = `cam=${camY.toFixed(2)} floor=${places.cabin.floorY.toFixed(2)} px=${player.x.toFixed(1)},${player.z.toFixed(1)}`;
@@ -2619,6 +2825,30 @@ if (new URLSearchParams(location.search).has('still')) {
         document.title = `OK:${audioCtx ? audioCtx.state : 'noctx'}:${music ? 'music' : 'nomusic'}:fps=${window.__fps}`;
       }
     }, 4000);
+  }
+  // 调试用：?selftest 跑一遍菜单 + 改键的完整链路
+  if (p.has('selftest')) {
+    setTimeout(() => {
+      const log = [];
+      try {
+        openMenu();
+        log.push('menu=' + pauseEl.classList.contains('show'));
+        document.getElementById('btn-keys').click();
+        log.push('panel=' + (document.querySelector('.panel.on') || {}).id);
+        const btn = document.querySelector('.bind-key[data-bind="forward"]');
+        btn.click();
+        log.push('listen=' + (btn.textContent === '按下新键…'));
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyI', key: 'i', bubbles: true }));
+        log.push('bound=' + binds.forward);
+        log.push('label=' + btn.textContent);
+        log.push('hint=' + keysEl.textContent.slice(0, 12));
+        document.getElementById('btn-save').click();
+        log.push('toast=' + toastEl.classList.contains('on'));
+      } catch (e) {
+        log.push('EX:' + e.message);
+      }
+      document.title = log.join(' | ');
+    }, 2200);
   }
 }
 
