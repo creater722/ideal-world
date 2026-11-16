@@ -1568,7 +1568,8 @@ function buildSnowRange() {
         // 雪比岩石更"穿透"雾：雾天里最先看见的总是雪线
         foot *= mix(1.0, 0.72, vSnow);
         // 雾色往天边的霞色靠一点，免得在天空下面拍出一条白带
-        vec3 mistCol = uFogColor;
+        // 雾色也要跟着入夜变暗，否则夜里山脚会比山头更亮，糊成一条浅色横带
+        vec3 mistCol = uFogColor * mix(1.0, 0.42, uNight);
         col = mix(col, mistCol, clamp(aerial + foot, 0.0, 0.90));
 
         // 夜里沉成深蓝
@@ -5591,7 +5592,8 @@ if (new URLSearchParams(location.search).has('still')) {
     dandelions.visible = false;
     fireflies.visible = false;
   }
-  // 调试：分别关掉天空 / 光柱，排查夜里那道竖条纹
+  // 调试：分别关掉天空 / 光柱 / 雪山，排查画面里的条纹与分层
+  if (p.has('nomtn')) snowRange.mesh.visible = false;
   if (p.has('skyno')) skyMesh.visible = false;
   if (p.has('norays')) postfx.grade.uniforms.uSunVis.value = 0;
   if (p.has('cloud')) { cloudBoost = parseFloat(p.get('cloud')) || 1; applyTime(); }
