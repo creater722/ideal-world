@@ -2061,6 +2061,8 @@ const seedEls = Array.from(document.querySelectorAll('.seed'));
 const stockPanel = document.getElementById('stock');
 const stockEls = [document.getElementById('c0'), document.getElementById('c1'), document.getElementById('c2')];
 const storageEls = [document.getElementById('s0'), document.getElementById('s1'), document.getElementById('s2')];
+const waterPill = document.getElementById('water');
+const waterN = document.getElementById('waterN');
 
 const raycaster = new THREE.Raycaster();
 const clickNdc = new THREE.Vector2();
@@ -2076,7 +2078,11 @@ const held = new Set();
 let nearBed = null;
 let nearBench = false;
 let nearDoor = false;
+let doorCloseT = 0;
 let nearBin = false;
+let nearWell = false;
+let nearCart = false;
+let pushingCart = false;
 let seated = false;
 let promptKey = '';
 let promptBar = null;
@@ -2089,13 +2095,205 @@ function showToast(text, duration = 2100) {
   toastTimer = setTimeout(() => toastEl.classList.remove('on'), duration);
 }
 
+/* ---- 键位：可自定义，存 localStorage ---- */
+const BIND_STORE = 'gw.binds.v1';
+const DEFAULT_BINDS = {
+  forward: 'KeyW',
+  back: 'KeyS',
+  left: 'KeyA',
+  right: 'KeyD',
+  run: 'ShiftLeft',
+};
+const BIND_LABELS = {
+  forward: '前进', back: '后退', left: '左移', right: '右移', run: '快走',
+};
+const binds = { ...DEFAULT_BINDS };
+try {
+  const saved = JSON.parse(localStorage.getItem(BIND_STORE) || '{}');
+  for (const k of Object.keys(DEFAULT_BINDS)) {
+    if (typeof saved[k] === 'string' && saved[k]) binds[k] = saved[k];
+  }
+} catch (err) { /* 隐私模式等情况下忽略 */ }
+
+const menuTipEl = document.getElementById('menu-tip');
+
+function persistBinds() {
+  try { localStorage.setItem(BIND_STORE, JSON.stringify(binds)); } catch (err) { /* 忽略 */ }
+}
+
+/* 把 KeyboardEvent.code 变成好看的标签 */
+function codeLabel(code) {
+  if (!code) return '—';
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  const special = {
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    ShiftLeft: 'Shift', ShiftRight: 'Shift',
+    ControlLeft: 'Ctrl', ControlRight: 'Ctrl',
+    AltLeft: 'Alt', AltRight: 'Alt',
+    Space: '空格', Tab: 'Tab', CapsLock: 'Caps',
+    Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/',
+    BracketLeft: '[', BracketRight: ']', Backslash: '\\', Minus: '-', Equal: '=',
+  };
+  return special[code] || code;
+}
+
+function refreshKeyHint() {
+  const b = binds;
+  keysEl.textContent =
+    `${codeLabel(b.forward)} ${codeLabel(b.left)} ${codeLabel(b.back)} ${codeLabel(b.right)} 走` +
+    ` · ${codeLabel(b.run)} 快走 · 点击收菜 · 1/2/3 选种 · E 互动 / 推车` +
+    ` · T 换时辰 · M 声音 · H 净屏 · Esc 菜单`;
+}
+
+/* 菜单里的提示条（HUD 的 toast 被菜单盖住了，所以单独一条） */
+let menuTipTimer = 0;
+function menuTip(msg) {
+  if (!menuTipEl) return;
+  clearTimeout(menuTipTimer);
+  if (!msg) {
+    menuTipEl.classList.remove('on');
+    return;
+  }
+  menuTipEl.textContent = msg;
+  menuTipEl.classList.add('on');
+  menuTipTimer = setTimeout(() => menuTipEl.classList.remove('on'), 2800);
+}
+
+/* ---- 面板切换 ---- */
+function showPanel(name) {
+  document.querySelectorAll('.panel').forEach((p) => p.classList.remove('on'));
+  const el = document.getElementById('panel-' + name);
+  if (el) el.classList.add('on');
+}
+
+/* ---- 菜单开关 ---- */
+function openMenu() {
+  if (!started) return;
+  paused = true;
+  held.clear();
+  lastMouseX = null;
+  lastMouseY = null;
+  body.classList.remove('playing');
+  pauseEl.classList.remove('hidden');
+  void pauseEl.offsetHeight;   // 强制一次 reflow，否则 opacity 过渡不触发
+  pauseEl.classList.add('show');
+  showPanel('main');
+  menuTip('');
+}
+
+function closeMenu() {
+  pauseEl.classList.remove('show');
+  paused = false;
+  lastMouseX = null;   // 免得关掉菜单后第一下鼠标把视角甩出去
+  lastMouseY = null;
+  setTimeout(() => {
+    if (!paused) pauseEl.classList.add('hidden');
+  }, 340);
+}
+
+function quitToTitle() {
+  started = false;
+  paused = false;
+  dragMode = false;
+  seated = false;
+  if (pushingCart) {
+    pushingCart = false;
+    farm.setPushing(false);
+  }
+  held.clear();
+  if (document.pointerLockElement === canvas) document.exitPointerLock();
+  pauseEl.classList.remove('show');
+  pauseEl.classList.add('hidden');
+  body.classList.remove('playing', 'started');
+  introEl.classList.remove('dismiss', 'hidden');
+  showPanel('main');
+}
+
+/* ---- 菜单按钮 ---- */
+document.getElementById('btn-resume').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenu();
+  tryLock();
+});
+
+document.getElementById('btn-world').addEventListener('click', (e) => {
+  e.stopPropagation();
+  showPanel('world');
+});
+
+document.getElementById('btn-keys').addEventListener('click', (e) => {
+  e.stopPropagation();
+  refreshBindButtons();
+  showPanel('keys');
+});
+
+document.getElementById('btn-save').addEventListener('click', (e) => {
+  e.stopPropagation();
+  menuTip('存档还在开发中，这个世界不需要你保存');
+});
+
+document.getElementById('btn-quit').addEventListener('click', (e) => {
+  e.stopPropagation();
+  quitToTitle();
+});
+
+document.querySelectorAll('[data-back]').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showPanel('main');
+  });
+});
+
+document.getElementById('goto-wild').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const target = location.protocol === 'file:' ? '理想的世界.html' : './';
+  pauseEl.classList.remove('show');
+  const fadeEl = document.getElementById('fade');
+  fadeEl.style.transition = 'opacity .55s ease';
+  fadeEl.style.opacity = '1';
+  setTimeout(() => { location.href = target; }, 580);
+});
+
+/* ---- 按键绑定 ---- */
+let listening = null;
+
+function refreshBindButtons() {
+  document.querySelectorAll('.bind-key').forEach((btn) => {
+    if (listening && listening.btn === btn) return;
+    btn.textContent = codeLabel(binds[btn.dataset.bind]);
+  });
+}
+
+document.querySelectorAll('.bind-key').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (listening) {
+      listening.btn.classList.remove('listening');
+      listening.btn.textContent = codeLabel(binds[listening.action]);
+    }
+    if (listening && listening.btn === btn) { listening = null; return; }
+    listening = { btn, action: btn.dataset.bind };
+    btn.classList.add('listening');
+    btn.textContent = '按下新键…';
+  });
+});
+
+/* 返回上一步：把监听中的按钮恢复 */
+function cancelListening() {
+  if (!listening) return;
+  listening.btn.classList.remove('listening');
+  listening.btn.textContent = codeLabel(binds[listening.action]);
+  listening = null;
+}
+
 function setSeedUI() {
   const sel = farm.getSelected();
   seedEls.forEach((el, i) => el.classList.toggle('on', i === sel));
 }
 
 function updateStock(bump = false) {
-  for (let i = 0; i < 3; i++) stockEls[i].textContent = String(farm.inventory[i]);
+  for (let i = 0; i < 3; i++) stockEls[i].textContent = String(farm.cart[i]);
   if (bump && stockPanel) {
     stockPanel.classList.remove('bump');
     void stockPanel.offsetWidth;
@@ -2107,11 +2305,19 @@ function updateStorage() {
   for (let i = 0; i < 3; i++) storageEls[i].textContent = String(farm.storage[i]);
 }
 
+function updateWater() {
+  const n = farm.waterCharges();
+  if (waterN) waterN.textContent = String(n);
+  if (waterPill) waterPill.classList.toggle('empty', n === 0);
+}
+
 function renderPrompt() {
   nearBed = null;
   nearBench = false;
   nearDoor = false;
   nearBin = false;
+  nearWell = false;
+  nearCart = false;
 
   if (!started || paused) {
     if (promptKey !== '') {
@@ -2139,17 +2345,17 @@ function renderPrompt() {
   const binD = Math.hypot(player.x - farm.storageBin.x, player.z - farm.storageBin.z);
   if (farm.isInsideBarn(player.x, player.z) && binD < 2.3) {
     nearBin = true;
-    const bag = farm.inventory[0] + farm.inventory[1] + farm.inventory[2];
+    const load = farm.cartLoad();
     const stored = farm.storage[0] + farm.storage[1] + farm.storage[2];
-    if (bag > 0) {
+    if (load > 0) {
       show(
-        `bin-${bag}-${stored}`,
-        `<span class="key">E</span><span>存入粮仓</span><span class="sub">背包 ${bag} 份 · 已存 ${stored} 份</span>`
+        `bin-${load}-${stored}`,
+        `<span class="key">E</span><span>倒进粮仓</span><span class="sub">车上 ${load} 份 · 已存 ${stored} 份</span>`
       );
     } else {
       show(
         `bin-empty-${stored}`,
-        `<span>粮仓</span><span class="sub">已存 ${stored} 份 · 先去菜畦收菜</span>`
+        `<span>粮仓</span><span class="sub">已存 ${stored} 份 · 用推车把菜运进来</span>`
       );
     }
     return;
@@ -2161,7 +2367,7 @@ function renderPrompt() {
     const open = farm.isDoorOpen();
     show(
       `door-${open}`,
-      `<span class="key">E</span><span>${open ? '关上' : '打开'}谷仓门</span><span class="sub">${open ? '里面就是粮仓' : '推开木门进去'}</span>`
+      `<span class="key">E</span><span>${open ? '关上' : '推开'}谷仓门</span><span class="sub">${open ? '走开一会儿会自动关上' : '走过去也会自动推开'}</span>`
     );
     return;
   }
@@ -2176,6 +2382,41 @@ function renderPrompt() {
   const bed = farm.nearestBed(player.x, player.z, 3.6);
   nearBed = bed;
   if (!bed) {
+    // 水井：打水
+    const wellD = Math.hypot(player.x - farm.well.x, player.z - farm.well.z);
+    if (wellD < 2.7) {
+      nearWell = true;
+      const charges = farm.waterCharges();
+      if (charges >= farm.canMax) {
+        show('well-full', `<span>水井</span><span class="sub">洒水壶是满的 · 去菜畦浇水</span>`);
+      } else {
+        show(
+          `well-${charges}`,
+          `<span class="key">E</span><span>打水</span><span class="sub">装满洒水壶 · 现在 ${charges}/${farm.canMax}</span>`
+        );
+      }
+      return;
+    }
+
+    // 小推车
+    const cartD = Math.hypot(player.x - farm.cartWorld.x, player.z - farm.cartWorld.z);
+    if (pushingCart || cartD < 2.0) {
+      nearCart = true;
+      const load = farm.cartLoad();
+      if (pushingCart) {
+        show(
+          `cart-push-${load}`,
+          `<span class="key">E</span><span>放下小推车</span><span class="sub">车斗 ${load}/${farm.cartCap} · 靠近菜会自动装车</span>`
+        );
+      } else {
+        show(
+          `cart-${load}`,
+          `<span class="key">E</span><span>推起小推车</span><span class="sub">车斗 ${load}/${farm.cartCap} · 运到粮仓去</span>`
+        );
+      }
+      return;
+    }
+
     if (promptKey !== '') {
       promptKey = '';
       promptEl.classList.remove('on');
@@ -2195,12 +2436,21 @@ function renderPrompt() {
     promptBar = null;
   } else if (bed.stage >= 2) {
     key = `ready-${bed.index}-${bed.crop}`;
-    html = `<span class="key">E</span><span>收获 · ${def.name}</span><span class="sub">也可直接点击 · ${def.yield} 份</span>`;
+    html = `<span class="key">E</span><span>收获 · ${def.name}</span><span class="sub">也可直接点击 · 收成会落在土上</span>`;
     promptBar = null;
   } else {
     const pct = Math.round(farm.bedProgress(bed) * 100);
-    key = `grow-${bed.index}-${bed.crop}`;
-    html = `<span>${def.name}生长中</span><span class="bar"><i></i></span><span class="sub">${pct}%</span>`;
+    const moist = Math.round(bed.moisture * 100);
+    const charges = farm.waterCharges();
+    if (charges > 0 && bed.moisture < 0.9) {
+      key = `water-${bed.index}-${bed.crop}-${charges}-${moist}`;
+      html = `<span class="key">E</span><span>浇水 · ${def.name}</span><span class="sub">土壤 ${moist}% · 水壶 ${charges}/${farm.canMax}</span>`;
+      promptBar = null;
+    } else {
+      key = `grow-${bed.index}-${bed.crop}-${moist}`;
+      const hint = charges === 0 && bed.moisture < 0.4 ? ' · 土干了，去水井打水' : ` · 土壤 ${moist}%`;
+      html = `<span>${def.name}生长中</span><span class="bar"><i></i></span><span class="sub">${pct}%${hint}</span>`;
+    }
   }
 
   if (key !== promptKey) {
@@ -2216,6 +2466,10 @@ function renderPrompt() {
 
 function sitDown() {
   if (seated) return;
+  if (pushingCart) {
+    pushingCart = false;
+    farm.setPushing(false);
+  }
   seated = true;
   player.x = farm.bench.x;
   player.z = farm.bench.z;
@@ -2239,6 +2493,7 @@ function standUp() {
 
 function toggleBarnDoor() {
   const open = farm.toggleDoor();
+  doorCloseT = 0;
   sfxDoor();
   showToast(open ? '谷仓门开了' : '谷仓门关上了');
   promptKey = '';
@@ -2246,19 +2501,45 @@ function toggleBarnDoor() {
 }
 
 function depositGrain() {
-  const res = farm.depositStorage();
+  const res = farm.unloadCart();
   if (res.total > 0) {
     const parts = [];
     for (let i = 0; i < 3; i++) {
       if (res.moved[i]) parts.push(`${CROPS[i].name} ${res.moved[i]}`);
     }
-    showToast(`存入粮仓 · ${parts.join(' · ')}`, 3000);
+    showToast(`入库 · ${parts.join(' · ')}`, 3000);
     updateStock(true);
     updateStorage();
     sfxDeposit();
   } else {
-    showToast('背包空着 · 先去菜畦收菜');
+    showToast('车斗空着 · 先去菜畦收菜，再推车过来');
   }
+  promptKey = '';
+  renderPrompt();
+}
+
+function toggleCart() {
+  pushingCart = !pushingCart;
+  farm.setPushing(pushingCart);
+  if (pushingCart) sfxCartUp();
+  else sfxCartDown();
+  showToast(
+    pushingCart ? '推起小推车 · 走到菜上会自动装车' : '放下了小推车',
+    2600
+  );
+  promptKey = '';
+  renderPrompt();
+}
+
+function fillWater() {
+  const res = farm.fillCan();
+  if (res.type === 'full') {
+    showToast('洒水壶是满的 · 去菜畦浇水');
+  } else {
+    sfxWellDraw();
+    showToast(`打满一壶水 · ${res.charges}/${farm.canMax}`, 2400);
+  }
+  updateWater();
   promptKey = '';
   renderPrompt();
 }
@@ -2280,23 +2561,36 @@ function interact() {
     sitDown();
     return;
   }
-  if (!nearBed) return;
-  const res = farm.interact(nearBed);
-  if (res.type === 'plant') {
-    showToast(`种下了 · ${CROPS[res.crop].name}`);
-    sfxPlant();
-  } else if (res.type === 'harvest') {
-    showToast(`+${res.amount} ${CROPS[res.crop].name}`);
-    updateStock(true);
-    sfxHarvest();
-  } else if (res.type === 'wait') {
-    showToast(`${CROPS[res.crop].name}还在长 · ${Math.round(res.progress * 100)}%`);
+  if (nearWell) {
+    fillWater();
+    return;
   }
-  promptKey = '';
-  renderPrompt();
+  if (nearBed) {
+    const res = farm.interact(nearBed);
+    if (res.type === 'plant') {
+      showToast(`种下了 · ${CROPS[res.crop].name}`);
+      sfxPlant();
+    } else if (res.type === 'harvest') {
+      showToast(`拔出来了 · ${CROPS[res.crop].name} ×${res.amount} · 推车过来装`, 2800);
+      sfxHarvest();
+    } else if (res.type === 'water') {
+      sfxPour();
+      showToast(`浇了水 · 土壤湿了 · 水壶剩 ${res.charges}/${farm.canMax}`, 2600);
+      updateWater();
+    } else if (res.type === 'wait') {
+      showToast(`${CROPS[res.crop].name}还在长 · ${Math.round(res.progress * 100)}%`);
+    }
+    promptKey = '';
+    renderPrompt();
+    return;
+  }
+  if (nearCart) {
+    toggleCart();
+    return;
+  }
 }
 
-function pickBedAt(clientX, clientY) {
+function pickTargetAt(clientX, clientY) {
   clickNdc.set(
     (clientX / window.innerWidth) * 2 - 1,
     -(clientY / window.innerHeight) * 2 + 1
@@ -2305,21 +2599,48 @@ function pickBedAt(clientX, clientY) {
   raycaster.far = 9;
   const hits = raycaster.intersectObjects(farm.clickTargets, false);
   if (!hits.length) return null;
-  return farm.beds[hits[0].object.userData.bedIndex] || null;
+  // 地上的收成优先，免得被菜畦的点击判定挡住
+  for (const h of hits) {
+    if (h.object.userData.produce) return { produce: h.object.userData.produce };
+  }
+  const bed = farm.beds[hits[0].object.userData.bedIndex];
+  return bed ? { bed } : null;
+}
+
+function collectToCart(item) {
+  const d = Math.hypot(player.x - farm.cartWorld.x, player.z - farm.cartWorld.z);
+  if (d > 4.6) {
+    showToast('小推车离得远 · 先去把它推过来');
+    return;
+  }
+  const res = farm.collectProduce(item);
+  if (res.ok) {
+    sfxLoad(item.crop);
+    showToast(`装车 · ${CROPS[item.crop].name}`);
+  } else if (res.reason === 'full') {
+    showToast('车斗满了 · 先运回粮仓');
+  }
 }
 
 function onCanvasClick(e) {
   if (!started || paused) return;
   const locked = document.pointerLockElement === canvas;
-  const bed = locked
-    ? pickBedAt(window.innerWidth * 0.5, window.innerHeight * 0.5)
-    : pickBedAt(e.clientX, e.clientY);
+  const target = locked
+    ? pickTargetAt(window.innerWidth * 0.5, window.innerHeight * 0.5)
+    : pickTargetAt(e.clientX, e.clientY);
 
-  if (bed) {
+  if (target && target.produce) {
+    collectToCart(target.produce);
+    promptKey = '';
+    renderPrompt();
+    return;
+  }
+
+  if (target && target.bed) {
+    const bed = target.bed;
     const res = farm.harvestBed(bed);
     if (res.type === 'harvest') {
-      showToast(`+${res.amount} ${CROPS[res.crop].name}`);
-      updateStock(true);
+      showToast(`拔出来了 · ${CROPS[res.crop].name} ×${res.amount} · 推车来装`, 2800);
       sfxHarvest();
     } else if (res.type === 'wait') {
       showToast(`${CROPS[res.crop].name}还没熟 · ${Math.round(res.progress * 100)}%`);
@@ -2347,6 +2668,8 @@ function startGame() {
   body.classList.add('playing', 'started');
   introEl.classList.add('dismiss');
   setTimeout(() => introEl.classList.add('hidden'), 1500);
+  refreshKeyHint();
+  refreshBindButtons();
   const fadeEl = document.getElementById('fade');
   fadeEl.style.transition = 'none';
   fadeEl.style.opacity = '0.95';
@@ -2402,8 +2725,7 @@ document.addEventListener('pointerlockchange', () => {
   lastMouseX = null;
   lastMouseY = null;
   if (document.pointerLockElement === canvas) {
-    paused = false;
-    pauseEl.classList.add('hidden');
+    closeMenu();
     body.classList.add('playing');
   } else if (started) {
     if (dragMode) {
@@ -2411,19 +2733,12 @@ document.addEventListener('pointerlockchange', () => {
       body.classList.remove('playing');
       pauseEl.classList.add('hidden');
     } else {
-      paused = true;
-      body.classList.remove('playing');
-      pauseEl.classList.remove('hidden');
+      // 指针锁定时浏览器会吞掉 Esc 的 keydown，解锁就等于「想停下」
+      openMenu();
     }
   }
 });
 document.addEventListener('pointerlockerror', () => enableDragMode());
-pauseEl.addEventListener('click', () => {
-  pauseEl.classList.add('hidden');
-  paused = false;
-  canvas.focus();
-  tryLock();
-});
 document.getElementById('enter').addEventListener('click', (e) => {
   e.stopPropagation();
   startGame();
@@ -2451,14 +2766,14 @@ window.addEventListener('mousemove', (e) => {
     if (lastMouseX === null) {
       lastMouseX = e.clientX;
       lastMouseY = e.clientY;
-      canvas.style.cursor = pickBedAt(e.clientX, e.clientY) ? 'pointer' : 'default';
+      canvas.style.cursor = pickTargetAt(e.clientX, e.clientY) ? 'pointer' : 'default';
       return;
     }
     dx = e.clientX - lastMouseX;
     dy = e.clientY - lastMouseY;
     lastMouseX = e.clientX;
     lastMouseY = e.clientY;
-    canvas.style.cursor = pickBedAt(e.clientX, e.clientY) ? 'pointer' : 'default';
+    canvas.style.cursor = pickTargetAt(e.clientX, e.clientY) ? 'pointer' : 'default';
   }
 
   if (!dx && !dy) return;
@@ -2469,12 +2784,47 @@ window.addEventListener('mousemove', (e) => {
 
 window.addEventListener('keydown', (e) => {
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
-  held.add(e.code);
+
+  // 按键设置：等待玩家按下新键
+  if (listening) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.code === 'Escape') { cancelListening(); return; }
+    const action = listening.action;
+    const oldKey = binds[action];
+    const occupied = Object.keys(binds).find((k) => k !== action && binds[k] === e.code);
+    if (occupied) {
+      binds[occupied] = oldKey;      // 撞键就互换，不让两个动作共用一个键
+      menuTip(`${codeLabel(e.code)} 原本是「${BIND_LABELS[occupied]}」，已与「${BIND_LABELS[action]}」互换`);
+    } else {
+      menuTip(`「${BIND_LABELS[action]}」改为 ${codeLabel(e.code)}`);
+    }
+    binds[action] = e.code;
+    persistBinds();
+    cancelListening();
+    refreshBindButtons();
+    refreshKeyHint();
+    return;
+  }
+
   if (!started) {
     if (e.code === 'Enter') startGame();
     return;
   }
-  if (seated && ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+
+  // Esc：开/关菜单（指针锁定状态下浏览器会自己解锁，走 pointerlockchange）
+  if (e.code === 'Escape') {
+    if (paused) { closeMenu(); tryLock(); } else { openMenu(); }
+    return;
+  }
+
+  if (paused) return;
+
+  held.add(e.code);
+  if (seated && [
+    binds.forward, binds.left, binds.back, binds.right,
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  ].includes(e.code)) {
     standUp();
   }
   if (e.code === 'Digit1' || e.key === '1') { farm.setSelected(0); setSeedUI(); promptKey = ''; }
@@ -2500,6 +2850,8 @@ let muted = false;
 let music = null;
 let windGain = null;
 let stepBuffer = null;
+let cartRollGain = null;
+let cartCreakTimer = 0;
 
 function initAudio() {
   if (audioCtx) {
@@ -2550,6 +2902,37 @@ function initAudio() {
   lfoGain.gain.value = 0.06;
   lfo.connect(lfoGain).connect(windGain.gain);
   lfo.start();
+
+  // 推车木轮滚过草地的底噪：一直循环，音量跟着推车速度走
+  const rollLen = Math.floor(audioCtx.sampleRate * 1.2);
+  const rollBuffer = audioCtx.createBuffer(1, rollLen, audioCtx.sampleRate);
+  const rollData = rollBuffer.getChannelData(0);
+  let rollLast = 0;
+  for (let i = 0; i < rollLen; i++) {
+    const white = Math.random() * 2 - 1;
+    rollLast = (rollLast + 0.09 * white) / 1.09;
+    rollData[i] = rollLast * 2.6;
+  }
+  const rollSrc = audioCtx.createBufferSource();
+  rollSrc.buffer = rollBuffer;
+  rollSrc.loop = true;
+  const rollHigh = audioCtx.createBiquadFilter();
+  rollHigh.type = 'highpass';
+  rollHigh.frequency.value = 60;
+  const rollLow = audioCtx.createBiquadFilter();
+  rollLow.type = 'lowpass';
+  rollLow.frequency.value = 300;
+  rollLow.Q.value = 0.9;
+  cartRollGain = audioCtx.createGain();
+  cartRollGain.gain.value = 0;
+  rollSrc.connect(rollHigh).connect(rollLow).connect(cartRollGain).connect(masterGain);
+  rollSrc.start();
+  const rollLfo = audioCtx.createOscillator();
+  rollLfo.frequency.value = 3.4;
+  const rollLfoGain = audioCtx.createGain();
+  rollLfoGain.gain.value = 72;
+  rollLfo.connect(rollLfoGain).connect(rollLow.frequency);
+  rollLfo.start();
 
   music = createMusic(audioCtx, masterGain);
   music.start();
@@ -2732,6 +3115,243 @@ function sfxDeposit() {
   osc.connect(g2).connect(masterGain);
   osc.start(t);
   osc.stop(t + 0.32);
+}
+
+/* 木头碰撞：短促的低频敲击 + 一点木屑感的噪声 */
+function woodKnock(t, freq = 140, vol = 0.03) {
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(freq, t);
+  osc.frequency.exponentialRampToValueAtTime(freq * 0.55, t + 0.12);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+  osc.connect(g).connect(masterGain);
+  osc.start(t);
+  osc.stop(t + 0.18);
+
+  if (!stepBuffer) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = stepBuffer;
+  src.playbackRate.value = 1.9;
+  const bp = audioCtx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 1800;
+  bp.Q.value = 1.2;
+  const ng = audioCtx.createGain();
+  ng.gain.setValueAtTime(0.0001, t);
+  ng.gain.linearRampToValueAtTime(vol * 0.45, t + 0.006);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+  src.connect(bp).connect(ng).connect(masterGain);
+  src.start(t);
+  src.stop(t + 0.08);
+}
+
+let lastLoadAt = 0;
+/* 收成掉进车斗：一声闷闷的“咚”，不同菜略有区别 */
+function sfxLoad(crop = 0) {
+  if (!audioCtx || muted) return;
+  const now = performance.now();
+  if (now - lastLoadAt < 90) return;
+  lastLoadAt = now;
+  const t = audioCtx.currentTime;
+  const base = crop === 1 ? 118 : crop === 2 ? 172 : 148;
+  woodKnock(t, base, 0.017);
+  if (!stepBuffer) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = stepBuffer;
+  src.playbackRate.value = crop === 1 ? 0.7 : 1.15;
+  const lp = audioCtx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 1200;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.0001, t + 0.004);
+  g.gain.linearRampToValueAtTime(0.015, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+  src.connect(lp).connect(g).connect(masterGain);
+  src.start(t + 0.004);
+  src.stop(t + 0.18);
+}
+
+/* 打水：辘轳吱呀 → 桶落水 → 水泡 → 提上来再吱一声（约 1.4 秒，跟着木桶动画） */
+function sfxWellDraw() {
+  if (!audioCtx || muted) return;
+  const t = audioCtx.currentTime;
+
+  const creak = audioCtx.createOscillator();
+  const creakGain = audioCtx.createGain();
+  const bp = audioCtx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 520;
+  bp.Q.value = 4.5;
+  creak.type = 'sawtooth';
+  creak.frequency.setValueAtTime(96, t);
+  creak.frequency.linearRampToValueAtTime(72, t + 0.62);
+  creakGain.gain.setValueAtTime(0.0001, t);
+  creakGain.gain.exponentialRampToValueAtTime(0.012, t + 0.06);
+  creakGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.66);
+  creak.connect(bp).connect(creakGain).connect(masterGain);
+  creak.start(t);
+  creak.stop(t + 0.68);
+
+  const splash = t + 0.62;
+  if (stepBuffer) {
+    const src = audioCtx.createBufferSource();
+    src.buffer = stepBuffer;
+    src.playbackRate.value = 0.9;
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2600, splash);
+    lp.frequency.exponentialRampToValueAtTime(600, splash + 0.3);
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, splash);
+    g.gain.linearRampToValueAtTime(0.05, splash + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, splash + 0.34);
+    src.connect(lp).connect(g).connect(masterGain);
+    src.start(splash);
+    src.stop(splash + 0.36);
+  }
+  for (let i = 0; i < 4; i++) {
+    const st = splash + 0.04 + i * 0.075;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(520 - i * 55, st);
+    osc.frequency.exponentialRampToValueAtTime(180, st + 0.1);
+    g.gain.setValueAtTime(0.0001, st);
+    g.gain.exponentialRampToValueAtTime(0.013, st + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, st + 0.13);
+    osc.connect(g).connect(masterGain);
+    osc.start(st);
+    osc.stop(st + 0.15);
+  }
+
+  const lift = t + 0.95;
+  const o2 = audioCtx.createOscillator();
+  const g2 = audioCtx.createGain();
+  const bp2 = audioCtx.createBiquadFilter();
+  bp2.type = 'bandpass';
+  bp2.frequency.value = 760;
+  bp2.Q.value = 5;
+  o2.type = 'sawtooth';
+  o2.frequency.setValueAtTime(120, lift);
+  o2.frequency.linearRampToValueAtTime(96, lift + 0.34);
+  g2.gain.setValueAtTime(0.0001, lift);
+  g2.gain.exponentialRampToValueAtTime(0.009, lift + 0.05);
+  g2.gain.exponentialRampToValueAtTime(0.0001, lift + 0.36);
+  o2.connect(bp2).connect(g2).connect(masterGain);
+  o2.start(lift);
+  o2.stop(lift + 0.38);
+}
+
+/* 浇水：壶嘴持续的水流声 + 几颗水泡，约 1 秒 */
+function sfxPour() {
+  if (!audioCtx || muted) return;
+  const t = audioCtx.currentTime;
+  if (stepBuffer) {
+    const src = audioCtx.createBufferSource();
+    src.buffer = stepBuffer;
+    src.loop = true;
+    src.playbackRate.value = 1.7;
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1700, t);
+    bp.frequency.exponentialRampToValueAtTime(900, t + 0.8);
+    bp.Q.value = 1.1;
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.028, t + 0.08);
+    g.gain.setValueAtTime(0.028, t + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.95);
+    src.connect(bp).connect(g).connect(masterGain);
+    src.start(t);
+    src.stop(t + 1.0);
+  }
+  for (let i = 0; i < 5; i++) {
+    const st = t + 0.08 + i * 0.14 + Math.random() * 0.05;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(620 + Math.random() * 220, st);
+    osc.frequency.exponentialRampToValueAtTime(300, st + 0.09);
+    g.gain.setValueAtTime(0.0001, st);
+    g.gain.exponentialRampToValueAtTime(0.008, st + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, st + 0.11);
+    osc.connect(g).connect(masterGain);
+    osc.start(st);
+    osc.stop(st + 0.12);
+  }
+}
+
+/* 推起小车：木头一响 + 一声短促的吱呀 */
+function sfxCartUp() {
+  if (!audioCtx || muted) return;
+  const t = audioCtx.currentTime;
+  woodKnock(t, 150, 0.03);
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  const bp = audioCtx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 900;
+  bp.Q.value = 6;
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(260, t + 0.02);
+  osc.frequency.linearRampToValueAtTime(340, t + 0.16);
+  osc.frequency.linearRampToValueAtTime(295, t + 0.3);
+  g.gain.setValueAtTime(0.0001, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.02, t + 0.06);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+  osc.connect(bp).connect(g).connect(masterGain);
+  osc.start(t + 0.02);
+  osc.stop(t + 0.36);
+}
+
+/* 放下小车：车轮落地的一下闷响 */
+function sfxCartDown() {
+  if (!audioCtx || muted) return;
+  const t = audioCtx.currentTime;
+  woodKnock(t, 118, 0.032);
+  woodKnock(t + 0.05, 92, 0.018);
+}
+
+/* 推着走时偶尔响一下的木轮吱呀 */
+function sfxCartCreak(speed = 1) {
+  if (!audioCtx || muted) return;
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  const bp = audioCtx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 620 + Math.random() * 520;
+  bp.Q.value = 7;
+  osc.type = 'sawtooth';
+  const f0 = 180 + Math.random() * 90;
+  osc.frequency.setValueAtTime(f0, t);
+  osc.frequency.linearRampToValueAtTime(f0 * 1.35, t + 0.1);
+  osc.frequency.linearRampToValueAtTime(f0 * 1.1, t + 0.22);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.008 + speed * 0.004, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.26);
+  osc.connect(bp).connect(g).connect(masterGain);
+  osc.start(t);
+  osc.stop(t + 0.28);
+}
+
+/* 每帧更新推车底噪：没推车或站着不动时自然收掉 */
+function updateCartAudio(speed, dt) {
+  if (!audioCtx || !cartRollGain) return;
+  const k = clamp((speed - 0.1) / 2.2, 0, 1);
+  cartRollGain.gain.setTargetAtTime(muted ? 0 : k * 0.05, audioCtx.currentTime, 0.07);
+  if (k > 0.12) {
+    cartCreakTimer -= dt;
+    if (cartCreakTimer <= 0) {
+      cartCreakTimer = 1.2 + Math.random() * 1.8;
+      sfxCartCreak(k);
+    }
+  } else {
+    cartCreakTimer = Math.min(cartCreakTimer, 0.6);
+  }
 }
 
 /* =========================================================
@@ -2948,6 +3568,7 @@ function updatePlayer(t, dt) {
   if (seated) {
     player.vx = 0;
     player.vz = 0;
+    updateCartAudio(0, dt);
     camY = lerp(camY, heightAt(player.x, player.z) + 1.12, 1 - Math.exp(-dt * 10));
     camera.position.set(player.x, camY, player.z);
     camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
@@ -2957,14 +3578,15 @@ function updatePlayer(t, dt) {
   let ix = 0;
   let iz = 0;
   if (!paused) {
-    if (held.has('KeyW') || held.has('ArrowUp')) iz -= 1;
-    if (held.has('KeyS') || held.has('ArrowDown')) iz += 1;
-    if (held.has('KeyA') || held.has('ArrowLeft')) ix -= 1;
-    if (held.has('KeyD') || held.has('ArrowRight')) ix += 1;
+    // 用自定义键位；方向键始终可用，作为兜底
+    if (held.has(binds.forward) || held.has('ArrowUp')) iz -= 1;
+    if (held.has(binds.back) || held.has('ArrowDown')) iz += 1;
+    if (held.has(binds.left) || held.has('ArrowLeft')) ix -= 1;
+    if (held.has(binds.right) || held.has('ArrowRight')) ix += 1;
   }
 
-  const run = held.has('ShiftLeft') || held.has('ShiftRight');
-  const maxSpeed = run ? 3.9 : 2.1;
+  const run = held.has(binds.run) || held.has('ShiftRight');
+  const maxSpeed = (run ? 3.9 : 2.1) * (pushingCart ? 0.72 : 1);
 
   const len = Math.hypot(ix, iz) || 1;
   ix /= len;
@@ -3001,13 +3623,41 @@ function updatePlayer(t, dt) {
   player.x = nx;
   player.z = nz;
 
+  // 谷仓门：走到门口就推开，进屋后自己关上
+  const toDoorX = farm.door.x - player.x;
+  const toDoorZ = farm.door.z - player.z;
+  const doorD = Math.hypot(toDoorX, toDoorZ);
+  if (!farm.isDoorOpen() && doorD < 1.5 && player.vx * toDoorX + player.vz * toDoorZ > 0.02) {
+    farm.pushDoor();
+    doorCloseT = 0;
+    sfxDoor();
+  }
+  if (farm.isDoorOpen()) {
+    doorCloseT += dt;
+    if (doorCloseT > 2.4 && doorD > 1.65) {
+      farm.closeDoor();
+      doorCloseT = 0;
+      sfxDoor();
+    }
+  } else {
+    doorCloseT = 0;
+  }
+
   const radius = Math.hypot(player.x, player.z);
   if (radius > WORLD.radius) {
     player.x *= WORLD.radius / radius;
     player.z *= WORLD.radius / radius;
   }
 
+  // 推着的小车跟在身前
+  if (pushingCart) {
+    const fwdX = -Math.sin(player.yaw) * 1.18;
+    const fwdZ = -Math.cos(player.yaw) * 1.18;
+    farm.moveCart(player.x + fwdX, player.z + fwdZ, player.yaw, dt);
+  }
+
   const speed = Math.hypot(player.vx, player.vz);
+  updateCartAudio(pushingCart ? speed : 0, dt);
   player.bob += dt * speed * 3.0;
 
   const lift = farm.floorLift(player.x, player.z);
@@ -3050,6 +3700,16 @@ function animate(now) {
   updatePlayer(elapsed, dt);
   updateWorld(elapsed, dt);
 
+  // 小推车在半路自动装车的事件
+  for (const ev of farm.pollEvents()) {
+    if (ev.type === 'collect') {
+      updateStock();
+      sfxLoad(ev.crop);
+    } else if (ev.type === 'full') {
+      showToast('车斗满了 · 先运回粮仓');
+    }
+  }
+
   postfx.setSun(SUN_DIR, camera);
   postfx.grade.uniforms.uDusk.value = timeState.dusk;
   postfx.render(dt, elapsed);
@@ -3069,6 +3729,7 @@ function animate(now) {
 
 updateStock();
 updateStorage();
+updateWater();
 setSeedUI();
 applyTime();
 ensureChunks(player.x, player.z, 21);
@@ -3085,6 +3746,12 @@ if (new URLSearchParams(location.search).has('still')) {
   if (p.has('yaw')) player.yaw = parseFloat(p.get('yaw'));
   if (p.has('pitch')) player.pitch = parseFloat(p.get('pitch'));
   if (p.has('clean')) body.classList.add('clean');
+
+  // 调试 / 截图：?menu 直接打开设置菜单，?panel=keys|world 直达子面板
+  if (p.has('menu')) {
+    setTimeout(() => openMenu(), 900);
+    if (p.has('panel')) setTimeout(() => showPanel(p.get('panel')), 1200);
+  }
 
   // 截图取景：把镜头和一只动物摆到固定位置，方便检查建模
   const focus = p.get('focus');
@@ -3153,7 +3820,10 @@ if (new URLSearchParams(location.search).has('still')) {
   }, 3000);
 }
 
-window.__grass = { player, farm, herd, heightAt, CROPS, updatePlayer, held, playAnimalSound };
+window.__grass = {
+  player, farm, herd, heightAt, CROPS, updatePlayer, held, playAnimalSound,
+  binds, openMenu, closeMenu, showPanel,
+};
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;

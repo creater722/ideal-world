@@ -1539,22 +1539,43 @@ export function createFarm(scene) {
   const well = new THREE.Group();
   well.position.set(fx - 3.1, FARM.y, fz + 5.1);
   root.add(well);
-  const wellBase = new THREE.Mesh(new THREE.CylinderGeometry(0.88, 0.96, 0.78, 18), M.stone);
+  // 井身做成空心的石圈：从上往下能看见井里的水，木桶真的下到井里
+  const wellBase = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.88, 0.96, 0.78, 20, 1, true),
+    M.stone
+  );
   wellBase.position.y = 0.39;
   wellBase.castShadow = true;
   wellBase.receiveShadow = true;
   well.add(wellBase);
+
+  // 井内壁：偏暗，能看出是个洞
+  const wellInnerMat = new THREE.MeshStandardMaterial({
+    map: stoneTex,
+    color: 0x6b665d,
+    roughness: 1.0,
+    side: THREE.DoubleSide,
+  });
+  const wellInner = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.78, 0.88, 0.76, 20, 1, true),
+    wellInnerMat
+  );
+  wellInner.position.y = 0.38;
+  well.add(wellInner);
+
   const rim = new THREE.Mesh(new THREE.TorusGeometry(0.86, 0.09, 8, 20), M.stone);
   rim.position.y = 0.8;
   rim.rotation.x = Math.PI / 2;
   rim.castShadow = true;
   well.add(rim);
-  const wellWater = new THREE.Mesh(new THREE.CircleGeometry(0.74, 20), M.water);
-  wellWater.position.y = 0.72;
+
+  // 井底的水面：压得比较深，木桶要真的放下去才能碰到
+  const wellWater = new THREE.Mesh(new THREE.CircleGeometry(0.82, 22), M.water);
+  wellWater.position.y = 0.3;
   wellWater.rotation.x = -Math.PI / 2;
   well.add(wellWater);
   for (const s of [-1, 1]) {
-    box(well, 0.12, 1.55, 0.12, M.dark, s * 0.65, 1.55, 0);
+    box(well, 0.12, 1.55, 0.12, M.dark, s * 0.82, 1.55, 0);
   }
   const wellRoof = new THREE.Mesh(new THREE.ConeGeometry(0.98, 0.48, 4), M.roof);
   wellRoof.position.y = 2.44;
@@ -1619,11 +1640,12 @@ export function createFarm(scene) {
   const woodMat = M.dark;
   const metalMat = new THREE.MeshStandardMaterial({ color: 0x78857f, roughness: 0.45, metalness: 0.5 });
 
-  // 独轮车
+  // 独轮车：车斗是能推着走的菜筐
   const barrow = new THREE.Group();
   barrow.position.set(fx - 0.8, FARM.y, fz + 2.6);
   barrow.rotation.y = 0.45;
   root.add(barrow);
+  const barrowWorld = { x: barrow.position.x, z: barrow.position.z, yaw: barrow.rotation.y };
   box(barrow, 1.1, 0.08, 0.62, woodMat, 0, 0.42, 0);
   box(barrow, 1.1, 0.24, 0.06, woodMat, 0, 0.54, -0.3);
   box(barrow, 1.1, 0.24, 0.06, woodMat, 0, 0.54, 0.3);
@@ -1633,22 +1655,208 @@ export function createFarm(scene) {
     box(barrow, 0.06, 0.06, 0.92, woodMat, s * 0.42, 0.5, 0.56, 0, 0, true);
     box(barrow, 0.08, 0.4, 0.08, woodMat, s * 0.42, 0.2, -0.34);
   }
+  const wheelSpin = new THREE.Group();
+  wheelSpin.position.set(0, 0.2, 0.42);
+  barrow.add(wheelSpin);
   const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.09, 14), M.darkWood);
-  wheel.position.set(0, 0.2, 0.42);
   wheel.rotation.z = Math.PI / 2;
   wheel.castShadow = true;
-  barrow.add(wheel);
-  for (let i = 0; i < 3; i++) {
-    const veg = new THREE.Mesh(A.sphere, i === 2 ? A.tomatoLeafMat : A.carrotMat);
-    veg.scale.setScalar(i === 2 ? 0.12 : 0.08);
-    veg.position.set((i - 1) * 0.24, 0.55, (i % 2) * 0.18 - 0.05);
-    veg.castShadow = true;
-    barrow.add(veg);
+  wheelSpin.add(wheel);
+  // 车斗底部垫一层干草
+  box(barrow, 0.96, 0.03, 0.5, M.hay, 0, 0.465, 0, 0, 0, false);
+  const cartVeg = new THREE.Group();
+  cartVeg.position.y = 0.47;
+  barrow.add(cartVeg);
+
+  /* ---------- 地上的收成：完整的胡萝卜 / 麦束 / 番茄 ---------- */
+  const bandGeo = new THREE.TorusGeometry(0.05, 0.011, 5, 12);
+
+  function makeProduce(kind, rand) {
+    const g = new THREE.Group();
+    if (kind === 0) {
+      // 胡萝卜：橙色的根躺在土上，叶子朝一边散开
+      const rootMesh = new THREE.Mesh(A.carrotRootGeo, A.carrotMat);
+      rootMesh.scale.set(1.15, 1.15, 1.15);
+      rootMesh.rotation.z = Math.PI / 2;
+      rootMesh.position.set(0.03, 0.1, 0);
+      rootMesh.castShadow = true;
+      g.add(rootMesh);
+      const ring = new THREE.Mesh(A.carrotRingGeo, A.carrotRingMat);
+      ring.scale.set(0.052, 0.052, 0.05);
+      ring.rotation.y = Math.PI / 2;
+      ring.position.set(0.04, 0.1, 0);
+      g.add(ring);
+      for (let i = 0; i < 4; i++) {
+        const leaf = new THREE.Mesh(A.leafGeo, A.leafMat);
+        leaf.scale.setScalar(0.34 + rand() * 0.14);
+        leaf.position.set(-0.1, 0.09, 0);
+        leaf.rotation.z = Math.PI / 2 + (rand() - 0.5) * 0.7;
+        leaf.rotation.x = (rand() - 0.5) * 1.3;
+        g.add(leaf);
+      }
+    } else if (kind === 1) {
+      // 小麦：一小束横躺着，中间系着草绳
+      for (let i = 0; i < 7; i++) {
+        const stalk = new THREE.Mesh(A.cylGeo, A.wheatStemMat);
+        stalk.scale.set(0.007, 0.17, 0.007);
+        stalk.rotation.z = Math.PI / 2;
+        stalk.rotation.y = (rand() - 0.5) * 0.34;
+        stalk.position.set(0, 0.04 + rand() * 0.025, (rand() - 0.5) * 0.08);
+        stalk.castShadow = true;
+        g.add(stalk);
+      }
+      for (let i = 0; i < 4; i++) {
+        const head = new THREE.Mesh(A.sphere, A.wheatHeadMat2);
+        head.scale.set(0.03, 0.022, 0.022);
+        head.position.set(0.15 + (rand() - 0.5) * 0.04, 0.06 + (rand() - 0.5) * 0.03, (rand() - 0.5) * 0.08);
+        g.add(head);
+      }
+      const band = new THREE.Mesh(bandGeo, M.rope);
+      band.position.set(-0.02, 0.055, 0);
+      band.rotation.y = Math.PI / 2;
+      g.add(band);
+    } else {
+      // 番茄：红果子带着绿色花萼
+      const body = new THREE.Mesh(A.sphere, A.tomatoMat);
+      body.scale.set(0.072, 0.063, 0.072);
+      body.position.y = 0.075;
+      body.castShadow = true;
+      g.add(body);
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * TAU;
+        const calyx = new THREE.Mesh(A.coneGeo, A.tomatoCalyxMat);
+        calyx.scale.set(0.026, 0.035, 0.012);
+        calyx.position.set(Math.cos(a) * 0.045, 0.118, Math.sin(a) * 0.045);
+        calyx.rotation.z = 0.5;
+        calyx.rotation.y = -a;
+        g.add(calyx);
+      }
+    }
+    return g;
   }
-  const barrowHay = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.34), M.hay);
-  barrowHay.position.set(0.25, 0.54, 0.02);
-  barrowHay.castShadow = true;
-  barrow.add(barrowHay);
+
+  function dropProduce(bed, amount) {
+    const rand = mulberry32(4300 + bed.index * 911 + (groundSeq + 1) * 37);
+    for (let i = 0; i < amount; i++) {
+      const g = makeProduce(bed.crop, rand);
+      const px = bed.cx + (rand() - 0.5) * (bed.halfX * 1.45);
+      const pz = bed.cz + (rand() - 0.5) * (bed.halfZ * 1.35);
+      g.position.set(px, bed.topY + 0.012, pz);
+      g.rotation.y = rand() * TAU;
+      root.add(g);
+
+      const hit = new THREE.Mesh(A.sphere, clickMat);
+      hit.scale.setScalar(0.26);
+      hit.position.y = 0.1;
+      hit.userData.produceId = ++groundSeq;
+      g.add(hit);
+
+      const item = { id: groundSeq, crop: bed.crop, mesh: g, hit, state: 0, fly: 0 };
+      hit.userData.produce = item;
+      groundCrops.push(item);
+      pickTargets.push(hit);
+    }
+  }
+
+  function refreshCartVisual() {
+    while (cartVeg.children.length) cartVeg.remove(cartVeg.children[0]);
+    let n = 0;
+    for (let k = 0; k < 3; k++) {
+      for (let i = 0; i < cart[k] && n < CART_CAP; i++, n++) {
+        const col = n % 3;
+        const row = Math.floor(n / 3) % 2;
+        const layer = Math.floor(n / 6);
+        let m;
+        if (k === 0) {
+          m = new THREE.Mesh(A.carrotRootGeo, A.carrotMat);
+          m.scale.set(0.8, 0.75, 0.8);
+          m.rotation.z = Math.PI / 2;
+        } else if (k === 1) {
+          m = new THREE.Mesh(A.cylGeo, A.wheatStemMat);
+          m.scale.set(0.03, 0.22, 0.03);
+          m.rotation.z = Math.PI / 2;
+          m.rotation.y = (n % 2) * 0.7;
+        } else {
+          m = new THREE.Mesh(A.sphere, A.tomatoMat);
+          m.scale.setScalar(0.068);
+        }
+        m.position.set(-0.32 + col * 0.32, 0.02 + layer * 0.085, -0.14 + row * 0.28);
+        m.castShadow = true;
+        cartVeg.add(m);
+      }
+    }
+  }
+  refreshCartVisual();
+
+  function cartLoad() {
+    return cart[0] + cart[1] + cart[2];
+  }
+
+  function autoCollect() {
+    if (!cartPushing) return;
+    let total = cartLoad();
+    if (total >= CART_CAP) return;
+    let full = false;
+    for (const item of groundCrops) {
+      if (item.state !== 0) continue;
+      const d = Math.hypot(item.mesh.position.x - barrowWorld.x, item.mesh.position.z - barrowWorld.z);
+      if (d > 1.15) continue;
+      item.state = 1;
+      item.fly = 0;
+      total++;
+      if (total >= CART_CAP) {
+        full = true;
+        break;
+      }
+    }
+    if (full) farmEvents.push({ type: 'full' });
+  }
+
+  function moveCart(tx, tz, yaw, dt) {
+    const k = 1 - Math.exp(-Math.min(dt, 0.05) * 10);
+    const px = barrowWorld.x;
+    const pz = barrowWorld.z;
+    barrowWorld.x += (tx - barrowWorld.x) * k;
+    barrowWorld.z += (tz - barrowWorld.z) * k;
+    barrowWorld.yaw = yaw;
+    barrow.position.set(
+      barrowWorld.x,
+      FARM.y + floorLift(barrowWorld.x, barrowWorld.z),
+      barrowWorld.z
+    );
+    barrow.rotation.y = yaw;
+    wheelSpin.rotation.x -= Math.hypot(barrowWorld.x - px, barrowWorld.z - pz) * 3.4;
+    autoCollect();
+  }
+
+  function collectProduce(item) {
+    if (!item || item.state !== 0) return { ok: false, reason: 'gone' };
+    if (cartLoad() >= CART_CAP) return { ok: false, reason: 'full' };
+    item.state = 1;
+    item.fly = 0;
+    return { ok: true };
+  }
+
+  function unloadCart() {
+    const moved = { 0: 0, 1: 0, 2: 0 };
+    let total = 0;
+    for (let i = 0; i < 3; i++) {
+      const n = cart[i];
+      moved[i] = n;
+      storage[i] += n;
+      total += n;
+      cart[i] = 0;
+    }
+    if (total) refreshCartVisual();
+    return { moved, total, storage };
+  }
+
+  function fillCan() {
+    if (canWater >= CAN_MAX) return { type: 'full', charges: canWater };
+    canWater = CAN_MAX;
+    wellDrawT = 0;
+    return { type: 'fill', charges: canWater };
+  }
 
   // 洒水壶
   const can = new THREE.Group();
@@ -1804,6 +2012,13 @@ export function createFarm(scene) {
     x = res.x;
     z = res.z;
 
+    // 停放着的独轮车（推着走的时候不挡路）
+    if (!cartPushing) {
+      res = pushOutCircle(x, z, barrowWorld.x, barrowWorld.z, 0.7 + r);
+      x = res.x;
+      z = res.z;
+    }
+
     // 草垛
     res = pushOutCircle(x, z, fx - 7.1, fz + 2.7, 1.15 + r);
     x = res.x;
@@ -1858,11 +2073,12 @@ export function createFarm(scene) {
     }
     const crop = bed.crop;
     const amount = CROPS[crop].yield;
-    inventory[crop] += amount;
     bed.planted = false;
     bed.growth = 0;
     bed.stage = 0;
     rebuildBed(bed);
+    // 收成不进口袋：完整地落在土上，等推车来装
+    dropProduce(bed, amount);
     return { type: 'harvest', crop, amount };
   }
 
@@ -1876,6 +2092,15 @@ export function createFarm(scene) {
       bed.stage = 0;
       rebuildBed(bed);
       return { type: 'plant', crop: selected };
+    }
+
+    // 生长期且壶里有水：先浇这一畦
+    if (bed.stage < 2 && canWater > 0 && bed.moisture < 0.9) {
+      canWater -= 1;
+      bed.moisture = 1;
+      bed.rippleT = 0;
+      bed.ripple.visible = true;
+      return { type: 'water', crop: bed.crop, charges: canWater };
     }
 
     return harvestBed(bed);
@@ -1898,7 +2123,31 @@ export function createFarm(scene) {
     motes.rotation.y = t * 0.018;
     motes.position.y = Math.sin(t * 0.3) * 0.05;
 
+    // 打水的木桶：放下去，再提上来
+    if (wellDrawT < 1) {
+      wellDrawT = Math.min(1, wellDrawT + dt / 1.5);
+      const dip = Math.sin(wellDrawT * Math.PI);
+      bucket.position.y = 1.26 - dip * 0.88;
+      bucketRim.position.y = 1.37 - dip * 0.88;
+      rope.scale.y = 1 + dip * 0.9;
+      rope.position.y = 1.75 - dip * 0.4;
+    }
+
     for (const bed of beds) {
+      // 土壤慢慢变干，湿的时候长得快
+      if (bed.moisture > 0) {
+        bed.moisture = Math.max(0, bed.moisture - dt * 0.0072);
+        const shade = 0.78 + (1 - bed.moisture) * 0.22;
+        bed.soilMat.color.setRGB(shade, shade * 0.99, shade * 0.97);
+      }
+      if (bed.rippleT < 1) {
+        bed.rippleT = Math.min(1, bed.rippleT + dt / 0.9);
+        const rk = bed.rippleT;
+        bed.ripple.visible = rk < 1;
+        bed.ripple.scale.setScalar(0.55 + rk * 2.1);
+        bed.rippleMat.opacity = (1 - rk) * 0.5;
+      }
+
       // 作物跟着风轻轻摆
       if (bed.planted) {
         for (const plant of bed.plants.children) {
@@ -1906,11 +2155,37 @@ export function createFarm(scene) {
         }
       }
       if (!bed.planted || bed.stage >= 2) continue;
-      bed.growth = Math.min(1, bed.growth + dt / CROPS[bed.crop].grow);
+      bed.growth = Math.min(
+        1,
+        bed.growth + (dt / CROPS[bed.crop].grow) * (0.45 + bed.moisture * 1.6)
+      );
       const st = bed.growth < 0.36 ? 0 : bed.growth < MATURE_AT ? 1 : 2;
       if (st !== bed.stage) {
         bed.stage = st;
         rebuildBed(bed);
+      }
+    }
+
+    // 收成飞进车斗
+    for (let i = groundCrops.length - 1; i >= 0; i--) {
+      const item = groundCrops[i];
+      if (item.state !== 1) continue;
+      item.fly = Math.min(1, item.fly + dt / 0.32);
+      const k = item.fly;
+      const ease = 1 - Math.pow(1 - k, 2);
+      item.mesh.position.x = lerp(item.mesh.position.x, barrowWorld.x, ease * 0.4);
+      item.mesh.position.z = lerp(item.mesh.position.z, barrowWorld.z, ease * 0.4);
+      item.mesh.position.y = lerp(item.mesh.position.y, FARM.y + 0.62, ease * 0.5);
+      item.mesh.scale.setScalar(1 - k * 0.7);
+      item.mesh.rotation.y += dt * 5;
+      if (k >= 1) {
+        cart[item.crop] += 1;
+        const idx = pickTargets.indexOf(item.hit);
+        if (idx >= 0) pickTargets.splice(idx, 1);
+        root.remove(item.mesh);
+        groundCrops.splice(i, 1);
+        refreshCartVisual();
+        farmEvents.push({ type: 'collect', crop: item.crop, total: cartLoad() });
       }
     }
   }
@@ -1918,6 +2193,18 @@ export function createFarm(scene) {
   function toggleDoor() {
     doorOpen = !doorOpen;
     return doorOpen;
+  }
+
+  function pushDoor() {
+    if (doorOpen) return false;
+    doorOpen = true;
+    return true;
+  }
+
+  function closeDoor() {
+    if (!doorOpen) return false;
+    doorOpen = false;
+    return true;
   }
 
   function isDoorOpen() {
@@ -1932,17 +2219,136 @@ export function createFarm(scene) {
     return isInsideBarn(x, z) ? 0.38 : 0;
   }
 
-  function depositStorage() {
-    const moved = { 0: 0, 1: 0, 2: 0 };
-    let total = 0;
-    for (let i = 0; i < 3; i++) {
-      const n = inventory[i];
-      moved[i] = n;
-      storage[i] += n;
-      inventory[i] = 0;
-      total += n;
+  /* ---------- 存档：只存变化量，地形不存 ---------- */
+
+  function clearGroundCrops() {
+    for (const item of groundCrops) {
+      root.remove(item.mesh);
+      const idx = pickTargets.indexOf(item.hit);
+      if (idx >= 0) pickTargets.splice(idx, 1);
     }
-    return { moved, total, storage };
+    groundCrops.length = 0;
+  }
+
+  function spawnGroundCrop(crop, px, pz, rot) {
+    const rand = mulberry32(4300 + Math.round(px * 131) + Math.round(pz * 977));
+    const g = makeProduce(crop, rand);
+    g.position.set(px, FARM.y + 0.272, pz);
+    g.rotation.y = rot;
+    root.add(g);
+
+    const hit = new THREE.Mesh(A.sphere, clickMat);
+    hit.scale.setScalar(0.26);
+    hit.position.y = 0.1;
+    hit.userData.produceId = ++groundSeq;
+    g.add(hit);
+
+    const item = { id: groundSeq, crop, mesh: g, hit, state: 0, fly: 0 };
+    hit.userData.produce = item;
+    groundCrops.push(item);
+    pickTargets.push(hit);
+  }
+
+  function serialize() {
+    return {
+      beds: beds.map((b) => ({
+        p: b.planted ? 1 : 0,
+        c: b.crop,
+        g: Math.round(b.growth * 1000) / 1000,
+        m: Math.round(b.moisture * 1000) / 1000,
+      })),
+      cart: [cart[0], cart[1], cart[2]],
+      storage: [storage[0], storage[1], storage[2]],
+      can: canWater,
+      door: doorOpen ? 1 : 0,
+      cartPos: [
+        Math.round(barrowWorld.x * 100) / 100,
+        Math.round(barrowWorld.z * 100) / 100,
+        Math.round(barrowWorld.yaw * 1000) / 1000,
+      ],
+      ground: groundCrops
+        .filter((i) => i.state === 0)
+        .slice(0, 200)
+        .map((i) => ({
+          c: i.crop,
+          x: Math.round(i.mesh.position.x * 100) / 100,
+          z: Math.round(i.mesh.position.z * 100) / 100,
+          r: Math.round(i.mesh.rotation.y * 1000) / 1000,
+        })),
+    };
+  }
+
+  function restore(state) {
+    if (!state || typeof state !== 'object') return false;
+
+    clearGroundCrops();
+
+    const bedState = Array.isArray(state.beds) ? state.beds : [];
+    for (let i = 0; i < beds.length; i++) {
+      const bed = beds[i];
+      const d = bedState[i] || {};
+      bed.planted = !!d.p;
+      bed.crop = Math.round(clamp(Number(d.c) || 0, 0, CROPS.length - 1));
+      bed.growth = clamp(Number(d.g) || 0, 0, 1);
+      bed.moisture = clamp(Number(d.m) || 0, 0, 1);
+      bed.stage = !bed.planted ? 0 : bed.growth < 0.36 ? 0 : bed.growth < MATURE_AT ? 1 : 2;
+      bed.rippleT = 1;
+      bed.ripple.visible = false;
+      const shade = 0.78 + (1 - bed.moisture) * 0.22;
+      bed.soilMat.color.setRGB(shade, shade * 0.99, shade * 0.97);
+      rebuildBed(bed);
+    }
+
+    const cartState = Array.isArray(state.cart) ? state.cart : [];
+    for (let k = 0; k < 3; k++) {
+      cart[k] = Math.round(clamp(Number(cartState[k]) || 0, 0, CART_CAP));
+    }
+    refreshCartVisual();
+
+    const storageState = Array.isArray(state.storage) ? state.storage : [];
+    for (let k = 0; k < 3; k++) {
+      storage[k] = Math.max(0, Math.round(Number(storageState[k]) || 0));
+    }
+
+    canWater = Math.round(clamp(Number(state.can) || 0, 0, CAN_MAX));
+    cartPushing = false;
+
+    doorOpen = !!state.door;
+    doorAnim = doorOpen ? 1 : 0;
+    doorPanel.position.x = -2.34 * doorAnim;
+
+    const pos = Array.isArray(state.cartPos) ? state.cartPos : [];
+    barrowWorld.x = clamp(Number(pos[0]) || barrowWorld.x, FARM.x - FARM.halfX, FARM.x + FARM.halfX);
+    barrowWorld.z = clamp(Number(pos[1]) || barrowWorld.z, FARM.z - FARM.halfZ, FARM.z + FARM.halfZ);
+    barrowWorld.yaw = Number(pos[2]) || 0;
+    barrow.position.set(
+      barrowWorld.x,
+      FARM.y + floorLift(barrowWorld.x, barrowWorld.z),
+      barrowWorld.z
+    );
+    barrow.rotation.y = barrowWorld.yaw;
+
+    const groundState = Array.isArray(state.ground) ? state.ground.slice(0, 200) : [];
+    for (const d of groundState) {
+      const crop = Math.round(clamp(Number(d.c) || 0, 0, CROPS.length - 1));
+      const px = clamp(Number(d.x) || 0, FARM.x - FARM.halfX, FARM.x + FARM.halfX);
+      const pz = clamp(Number(d.z) || 0, FARM.z - FARM.halfZ, FARM.z + FARM.halfZ);
+      spawnGroundCrop(crop, px, pz, Number(d.r) || 0);
+    }
+
+    return true;
+  }
+
+  function setPushing(v) {
+    cartPushing = !!v;
+  }
+
+  function isPushing() {
+    return cartPushing;
+  }
+
+  function pollEvents() {
+    return farmEvents.splice(0, farmEvents.length);
   }
 
   function bedProgress(bed) {
@@ -1965,17 +2371,32 @@ export function createFarm(scene) {
   return {
     root,
     beds,
-    clickTargets: beds.map((b) => b.hitbox),
+    clickTargets: pickTargets,
     CROPS,
-    inventory,
     storage,
+    cart,
+    cartCap: CART_CAP,
+    cartWorld: barrowWorld,
+    cartLoad,
+    unloadCart,
+    collectProduce,
+    groundCrops,
+    moveCart,
+    setPushing,
+    isPushing,
+    fillCan,
+    waterCharges: () => canWater,
+    canMax: CAN_MAX,
+    pollEvents,
+    well: { x: fx - 3.1, z: fz + 5.1 },
     update,
     resolve,
     nearestBed,
     interact,
     harvestBed,
-    depositStorage,
     toggleDoor,
+    pushDoor,
+    closeDoor,
     isDoorOpen,
     isInsideBarn,
     floorLift,
@@ -1987,5 +2408,7 @@ export function createFarm(scene) {
     bedProgress,
     setNight,
     MATURE_AT,
+    serialize,
+    restore,
   };
 }
