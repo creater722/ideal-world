@@ -252,6 +252,42 @@
   }
   @keyframes waitPulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 
+  /* ---------- 云端存档 ---------- */
+  .save-state {
+    margin-bottom: 12px; padding: 10px 12px;
+    border-radius: 9px; background: rgba(85, 96, 47, .07);
+    font-size: 10.5px; line-height: 1.6; letter-spacing: .08em;
+    color: rgba(59, 58, 40, .66); text-align: left;
+  }
+  .save-input {
+    display: block; width: 100%; margin-bottom: 8px; padding: 10px 12px;
+    border: 1px solid rgba(92, 82, 52, .22); border-radius: 8px;
+    background: rgba(255, 252, 240, .82);
+    font-family: inherit; font-size: 11.5px; letter-spacing: .06em; color: #3f452b;
+    outline: none;
+  }
+  .save-input:focus { border-color: rgba(70, 78, 42, .6); background: #fffdf5; }
+  .save-actions { display: flex; gap: 8px; margin: 8px 0 4px; }
+  .save-btn {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    padding: 9px 8px;
+    border: 1px solid rgba(92, 82, 52, .2); border-radius: 8px;
+    background: rgba(255, 252, 240, .62);
+    font-family: inherit; font-size: 11px; letter-spacing: .12em; color: #4a5131;
+    cursor: pointer; transition: background .24s ease, border-color .24s ease;
+  }
+  .save-btn:hover { background: rgba(255, 253, 244, .98); border-color: rgba(70, 78, 42, .46); }
+  .save-btn.primary { background: #55602f; border-color: #55602f; color: #fbf8e9; }
+  .save-btn.primary:hover { background: #616c37; }
+  .save-btn:disabled { opacity: .45; cursor: default; }
+  .save-hello { font-size: 11.5px; letter-spacing: .1em; color: #434a2c; margin-bottom: 4px; }
+  .save-meta { font-size: 9.5px; letter-spacing: .08em; color: rgba(59, 58, 40, .46); min-height: 14px; margin-bottom: 8px; }
+  .save-backup { display: flex; gap: 8px; margin-top: 10px; }
+  .save-note {
+    margin-top: 9px; font-size: 9.5px; line-height: 1.55; letter-spacing: .06em;
+    color: rgba(59, 58, 40, .4); text-align: left;
+  }
+
   .menu-tip {
     margin-top: 10px; min-height: 15px;
     font-size: 10.5px; letter-spacing: .12em; line-height: 1.5;
@@ -546,7 +582,7 @@
       <button class="menu-btn primary" id="btn-resume">继续游戏</button>
       <button class="menu-btn" id="btn-world">切换世界<span class="hint">草原 / 原野</span></button>
       <button class="menu-btn" id="btn-keys">按键设置</button>
-      <button class="menu-btn" id="btn-save">保存游戏<span class="hint">开发中</span></button>
+      <button class="menu-btn" id="btn-save">云端存档<span class="hint" id="save-hint">未登录</span></button>
       <button class="menu-btn" id="btn-quit">退出游戏</button>
     </div>
 
@@ -559,6 +595,38 @@
         <div><div class="world-name">原野</div><div class="world-desc">湖、木屋、黄昏与星空</div></div>
         <div class="world-tag">前往 →</div>
       </div>
+      <button class="panel-back" data-back>← 返回</button>
+    </div>
+
+    <div class="panel" id="panel-save">
+      <div class="save-state" id="save-state">登录后，菜地、推车、粮仓和地面上的收成会保存到云端。</div>
+
+      <div id="save-form">
+        <input class="save-input" id="save-user" maxlength="24" placeholder="用户名（3-24 位字母数字）" autocomplete="username">
+        <input class="save-input" id="save-pass" type="password" maxlength="64" placeholder="密码（至少 6 位）" autocomplete="current-password">
+        <div class="save-actions">
+          <button class="save-btn primary" id="save-login">登录</button>
+          <button class="save-btn" id="save-register">注册</button>
+        </div>
+      </div>
+
+      <div id="save-user-box" hidden>
+        <div class="save-hello">已登录：<b id="save-name"></b></div>
+        <div class="save-meta" id="save-meta"></div>
+        <div class="save-actions">
+          <button class="save-btn primary" id="save-now">立即同步</button>
+          <button class="save-btn" id="save-reload">从云端载入</button>
+          <button class="save-btn" id="save-logout">退出</button>
+        </div>
+      </div>
+
+      <div class="save-backup">
+        <button class="save-btn" id="save-export">导出备份</button>
+        <label class="save-btn" for="save-import">导入备份</label>
+        <input id="save-import" type="file" accept="application/json,.json" hidden>
+      </div>
+
+      <div class="save-note">站点当前是 HTTP，账号只用于这个游戏，请不要使用常用密码。换设备登录同一账号即可接着玩。</div>
       <button class="panel-back" data-back>← 返回</button>
     </div>
 

@@ -2228,11 +2228,6 @@ document.getElementById('btn-keys').addEventListener('click', (e) => {
   showPanel('keys');
 });
 
-document.getElementById('btn-save').addEventListener('click', (e) => {
-  e.stopPropagation();
-  menuTip('存档还在开发中，这个世界不需要你保存');
-});
-
 document.getElementById('btn-quit').addEventListener('click', (e) => {
   e.stopPropagation();
   quitToTitle();
@@ -2309,6 +2304,383 @@ function updateWater() {
   const n = farm.waterCharges();
   if (waterN) waterN.textContent = String(n);
   if (waterPill) waterPill.classList.toggle('empty', n === 0);
+}
+
+/* =========================================================
+   10.5 云端存档
+   ========================================================= */
+
+const CLOUD_TOKEN_KEY = 'iw.cloud.token';
+const CLOUD_NAME_KEY = 'iw.cloud.name';
+const CLOUD_API = location.protocol === 'file:' ? '' : new URL('api/index.php', location.href).href;
+
+const saveStateEl = document.getElementById('save-state');
+const saveFormEl = document.getElementById('save-form');
+const saveUserBoxEl = document.getElementById('save-user-box');
+const saveUserEl = document.getElementById('save-user');
+const savePassEl = document.getElementById('save-pass');
+const saveNameEl = document.getElementById('save-name');
+const saveMetaEl = document.getElementById('save-meta');
+const saveHintEl = document.getElementById('save-hint');
+const saveImportEl = document.getElementById('save-import');
+
+let cloudToken = '';
+let cloudName = '';
+let cloudRev = 0;
+let cloudUpdatedAt = 0;
+let cloudLastSaved = '';
+let cloudSaving = false;
+let cloudTimer = 0;
+
+try {
+  cloudToken = localStorage.getItem(CLOUD_TOKEN_KEY) || '';
+  cloudName = localStorage.getItem(CLOUD_NAME_KEY) || '';
+} catch (e) {
+  cloudToken = '';
+  cloudName = '';
+}
+
+function cloudSetState(text) {
+  if (saveStateEl) saveStateEl.textContent = text;
+}
+
+function cloudFormatTime(seconds) {
+  if (!seconds) return '还没有云端存档';
+  const d = new Date(seconds * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function cloudUpdateUI() {
+  const logged = !!cloudToken;
+  if (saveFormEl) saveFormEl.hidden = logged;
+  if (saveUserBoxEl) saveUserBoxEl.hidden = !logged;
+  if (saveHintEl) saveHintEl.textContent = logged ? '已登录' : '未登录';
+  if (saveNameEl) saveNameEl.textContent = cloudName || '';
+  if (!logged) {
+    if (saveMetaEl) saveMetaEl.textContent = '';
+    cloudSetState('登录后，菜地、推车、粮仓和地面上的收成会保存到云端。');
+    return;
+  }
+  if (saveMetaEl) saveMetaEl.textContent = cloudUpdatedAt
+    ? `上次同步：${cloudFormatTime(cloudUpdatedAt)}`
+    : (cloudLastSaved ? '已同步' : '正在连接云端…');
+  cloudSetState('已开启自动同步：每 20 秒、离开页面时都会保存；换设备登录同一账号即可接着玩。');
+}
+
+async function cloudCall(action, payload, method = 'POST') {
+  if (!CLOUD_API) throw new Error('本地打开时不能使用云存档，请用线上地址');
+  const headers = { 'Content-Type': 'application/json' };
+  if (cloudToken) {
+    headers.Authorization = 'Bearer ' + cloudToken;
+    headers['X-Auth-Token'] = cloudToken;
+  }
+  const res = await fetch(`${CLOUD_API}?action=${encodeURIComponent(action)}`, {
+    method,
+    headers,
+    body: method === 'GET' ? undefined : JSON.stringify(payload || {}),
+    cache: 'no-store',
+  });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    throw new Error('存档服务返回异常');
+  }
+  if (res.status === 401) {
+    cloudToken = '';
+    cloudName = '';
+    try {
+      localStorage.removeItem(CLOUD_TOKEN_KEY);
+      localStorage.removeItem(CLOUD_NAME_KEY);
+    } catch (e) { /* ignore */ }
+    cloudUpdateUI();
+  }
+  return { status: res.status, data };
+}
+
+function cloudSnapshot() {
+  return {
+    v: 1,
+    world: 'grass',
+    hour: Math.round(time.hour * 1000) / 1000,
+    player: {
+      x: Math.round(player.x * 100) / 100,
+      z: Math.round(player.z * 100) / 100,
+      yaw: Math.round(player.yaw * 1000) / 1000,
+      pitch: Math.round(player.pitch * 1000) / 1000,
+    },
+    farm: farm.serialize(),
+  };
+}
+
+function cloudApply(data) {
+  if (!data || typeof data !== 'object' || data.v !== 1 || !data.farm) return false;
+  if (Number.isFinite(data.hour)) {
+    time.setHour(((data.hour % 24) + 24) % 24);
+  }
+  const p = data.player;
+  if (p && Number.isFinite(p.x) && Number.isFinite(p.z)) {
+    const lim = WORLD.radius - 4;
+    player.x = clamp(p.x, -lim, lim);
+    player.z = clamp(p.z, -lim, lim);
+    player.yaw = Number(p.yaw) || 0;
+    player.pitch = clamp(Number(p.pitch) || 0, -1.35, 1.35);
+    player.vx = 0;
+    player.vz = 0;
+    camY = heightAt(player.x, player.z) + EYE;
+  }
+  if (!farm.restore(data.farm)) return false;
+  seated = false;
+  pushingCart = false;
+  farm.setPushing(false);
+  updateStock();
+  updateStorage();
+  updateWater();
+  return true;
+}
+
+async function cloudSave(keepalive = false) {
+  if (!cloudToken || cloudSaving || !CLOUD_API) return;
+  const snapshot = cloudSnapshot();
+  const text = JSON.stringify(snapshot);
+  if (text === cloudLastSaved) return;
+  cloudSaving = true;
+  try {
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + cloudToken,
+      'X-Auth-Token': cloudToken,
+    };
+    const res = await fetch(`${CLOUD_API}?action=save`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ rev: cloudRev, data: text }),
+      cache: 'no-store',
+      keepalive,
+    });
+    const data = await res.json().catch(() => null);
+    if (res.status === 401) {
+      cloudToken = '';
+      cloudName = '';
+      try {
+        localStorage.removeItem(CLOUD_TOKEN_KEY);
+        localStorage.removeItem(CLOUD_NAME_KEY);
+      } catch (e) { /* ignore */ }
+      cloudUpdateUI();
+      return;
+    }
+    if (res.status === 409 && data && data.data) {
+      // 别处已经存过更新的一版：以云端为准，避免旧页面覆盖新进度
+      if (cloudApply(data.data)) {
+        cloudRev = data.rev;
+        cloudUpdatedAt = data.updatedAt || 0;
+        cloudLastSaved = JSON.stringify(data.data);
+        if (saveMetaEl) saveMetaEl.textContent = `上次同步：${cloudFormatTime(data.updatedAt)}`;
+        showToast('云端已有更新的存档 · 已载入最新进度');
+      }
+      return;
+    }
+    if (!res.ok || !data || !data.ok) {
+      throw new Error((data && data.error) || '同步失败');
+    }
+    cloudRev = data.rev;
+    cloudUpdatedAt = data.updatedAt || 0;
+    cloudLastSaved = text;
+    if (saveMetaEl) saveMetaEl.textContent = `上次同步：${cloudFormatTime(data.updatedAt)}`;
+  } catch (e) {
+    if (!keepalive) cloudSetState(`同步失败：${e.message || '检查一下网络'}（本地进度还在）`);
+  } finally {
+    cloudSaving = false;
+  }
+}
+
+function cloudQueueSave() {
+  if (!cloudToken) return;
+  clearTimeout(cloudTimer);
+  cloudTimer = setTimeout(() => cloudSave(), 1400);
+}
+
+async function cloudLogin(register) {
+  if (!CLOUD_API) {
+    cloudSetState('本地打开时不能云存档，请用线上地址');
+    return;
+  }
+  const username = (saveUserEl ? saveUserEl.value : '').trim();
+  const password = savePassEl ? savePassEl.value : '';
+  if (!username || !password) {
+    cloudSetState('请先填用户名和密码');
+    return;
+  }
+  cloudSetState(register ? '正在创建账号…' : '正在登录…');
+  try {
+    const { status, data } = await cloudCall(register ? 'register' : 'login', { username, password });
+    if (!data || !data.ok) {
+      cloudSetState((data && data.error) || '登录失败');
+      return;
+    }
+    cloudToken = data.token;
+    cloudName = data.username;
+    cloudRev = data.rev || 0;
+    try {
+      localStorage.setItem(CLOUD_TOKEN_KEY, cloudToken);
+      localStorage.setItem(CLOUD_NAME_KEY, cloudName);
+    } catch (e) { /* ignore */ }
+    cloudUpdateUI();
+    if (data.data && cloudApply(data.data)) {
+      cloudLastSaved = JSON.stringify(data.data);
+      cloudUpdatedAt = data.updatedAt || 0;
+      if (saveMetaEl) saveMetaEl.textContent = `上次同步：${cloudFormatTime(data.updatedAt)}`;
+      showToast('已载入云端存档');
+    } else {
+      await cloudSave();
+      showToast(register ? '账号已创建 · 当前世界已上传' : '已登录 · 当前世界已上传');
+    }
+    if (savePassEl) savePassEl.value = '';
+  } catch (e) {
+    cloudSetState(e.message || '连不上存档服务');
+  }
+}
+
+async function cloudReload() {
+  if (!cloudToken) return;
+  cloudSetState('正在从云端载入…');
+  try {
+    const { status, data } = await cloudCall('load', null, 'GET');
+    if (status !== 200 || !data || !data.ok) {
+      cloudSetState((data && data.error) || '载入失败');
+      return;
+    }
+    cloudRev = data.rev || 0;
+    if (data.data && cloudApply(data.data)) {
+      cloudLastSaved = JSON.stringify(data.data);
+      cloudUpdatedAt = data.updatedAt || 0;
+      if (saveMetaEl) saveMetaEl.textContent = `上次同步：${cloudFormatTime(data.updatedAt)}`;
+      cloudSetState('已载入云端最新存档');
+      showToast('已载入云端最新存档');
+    } else {
+      cloudSetState('云端还没有存档，先点“立即同步”上传当前世界');
+    }
+  } catch (e) {
+    cloudSetState(e.message || '载入失败');
+  }
+}
+
+function cloudLogout() {
+  cloudToken = '';
+  cloudName = '';
+  cloudRev = 0;
+  cloudUpdatedAt = 0;
+  cloudLastSaved = '';
+  try {
+    localStorage.removeItem(CLOUD_TOKEN_KEY);
+    localStorage.removeItem(CLOUD_NAME_KEY);
+  } catch (e) { /* ignore */ }
+  cloudUpdateUI();
+  cloudSetState('已退出登录，云端存档仍然保留');
+}
+
+function cloudExport() {
+  const payload = { ...cloudSnapshot(), exportedAt: new Date().toISOString() };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  a.href = url;
+  a.download = `草原存档-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  cloudSetState('备份文件已导出，建议存到网盘或另一台设备');
+}
+
+function cloudImport(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(String(reader.result || ''));
+      if (!cloudApply(data)) {
+        cloudSetState('这个备份文件不是草原存档');
+        return;
+      }
+      cloudLastSaved = '';
+      cloudSetState('备份已导入，正在同步到云端…');
+      showToast('备份已导入');
+      cloudQueueSave();
+    } catch (e) {
+      cloudSetState('备份文件读不出来');
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function cloudBoot() {
+  cloudUpdateUI();
+  if (!cloudToken) return;
+  try {
+    const { status, data } = await cloudCall('load', null, 'GET');
+    if (status === 200 && data && data.ok) {
+      cloudRev = data.rev || 0;
+      cloudUpdatedAt = data.updatedAt || 0;
+      if (data.data && cloudApply(data.data)) {
+        cloudLastSaved = JSON.stringify(data.data);
+        if (saveMetaEl) saveMetaEl.textContent = `上次同步：${cloudFormatTime(cloudUpdatedAt)}`;
+        cloudSetState(`已连接云端 · ${cloudName}`);
+      } else {
+        cloudSetState(`已登录 ${cloudName} · 云端还没有存档`);
+      }
+    }
+  } catch (e) {
+    cloudSetState(`暂时连不上云端：${e.message || '检查网络'}（本地进度还在）`);
+  }
+}
+
+document.getElementById('btn-save').addEventListener('click', (e) => {
+  e.stopPropagation();
+  cloudUpdateUI();
+  showPanel('save');
+});
+
+document.getElementById('save-login').addEventListener('click', (e) => {
+  e.stopPropagation();
+  cloudLogin(false);
+});
+document.getElementById('save-register').addEventListener('click', (e) => {
+  e.stopPropagation();
+  cloudLogin(true);
+});
+document.getElementById('save-now').addEventListener('click', (e) => {
+  e.stopPropagation();
+  cloudSave();
+});
+document.getElementById('save-reload').addEventListener('click', (e) => {
+  e.stopPropagation();
+  cloudReload();
+});
+document.getElementById('save-logout').addEventListener('click', (e) => {
+  e.stopPropagation();
+  cloudLogout();
+});
+document.getElementById('save-export').addEventListener('click', (e) => {
+  e.stopPropagation();
+  cloudExport();
+});
+if (saveImportEl) {
+  saveImportEl.addEventListener('change', () => {
+    cloudImport(saveImportEl.files && saveImportEl.files[0]);
+    saveImportEl.value = '';
+  });
+}
+if (savePassEl) {
+  savePassEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      cloudLogin(false);
+    }
+  });
 }
 
 function renderPrompt() {
@@ -2498,6 +2870,7 @@ function toggleBarnDoor() {
   showToast(open ? '谷仓门开了' : '谷仓门关上了');
   promptKey = '';
   renderPrompt();
+  cloudQueueSave();
 }
 
 function depositGrain() {
@@ -2511,6 +2884,7 @@ function depositGrain() {
     updateStock(true);
     updateStorage();
     sfxDeposit();
+    cloudQueueSave();
   } else {
     showToast('车斗空着 · 先去菜畦收菜，再推车过来');
   }
@@ -2542,6 +2916,7 @@ function fillWater() {
   updateWater();
   promptKey = '';
   renderPrompt();
+  cloudQueueSave();
 }
 
 function interact() {
@@ -2580,6 +2955,7 @@ function interact() {
     } else if (res.type === 'wait') {
       showToast(`${CROPS[res.crop].name}还在长 · ${Math.round(res.progress * 100)}%`);
     }
+    if (res.type !== 'wait') cloudQueueSave();
     promptKey = '';
     renderPrompt();
     return;
@@ -2617,6 +2993,7 @@ function collectToCart(item) {
   if (res.ok) {
     sfxLoad(item.crop);
     showToast(`装车 · ${CROPS[item.crop].name}`);
+    cloudQueueSave();
   } else if (res.reason === 'full') {
     showToast('车斗满了 · 先运回粮仓');
   }
@@ -2642,6 +3019,7 @@ function onCanvasClick(e) {
     if (res.type === 'harvest') {
       showToast(`拔出来了 · ${CROPS[res.crop].name} ×${res.amount} · 推车来装`, 2800);
       sfxHarvest();
+      cloudQueueSave();
     } else if (res.type === 'wait') {
       showToast(`${CROPS[res.crop].name}还没熟 · ${Math.round(res.progress * 100)}%`);
     } else if (res.type === 'empty') {
@@ -3631,6 +4009,7 @@ function updatePlayer(t, dt) {
     farm.pushDoor();
     doorCloseT = 0;
     sfxDoor();
+    cloudQueueSave();
   }
   if (farm.isDoorOpen()) {
     doorCloseT += dt;
@@ -3638,6 +4017,7 @@ function updatePlayer(t, dt) {
       farm.closeDoor();
       doorCloseT = 0;
       sfxDoor();
+      cloudQueueSave();
     }
   } else {
     doorCloseT = 0;
@@ -3701,7 +4081,8 @@ function animate(now) {
   updateWorld(elapsed, dt);
 
   // 小推车在半路自动装车的事件
-  for (const ev of farm.pollEvents()) {
+  const events = farm.pollEvents();
+  for (const ev of events) {
     if (ev.type === 'collect') {
       updateStock();
       sfxLoad(ev.crop);
@@ -3709,6 +4090,7 @@ function animate(now) {
       showToast('车斗满了 · 先运回粮仓');
     }
   }
+  if (events.length) cloudQueueSave();
 
   postfx.setSun(SUN_DIR, camera);
   postfx.grade.uniforms.uDusk.value = timeState.dusk;
@@ -3735,6 +4117,18 @@ applyTime();
 ensureChunks(player.x, player.z, 21);
 requestAnimationFrame(animate);
 
+// 云端存档：有令牌就尝试拉取；游戏开始后每 20 秒自动同步
+if (!new URLSearchParams(location.search).has('still')) cloudBoot();
+setInterval(() => {
+  if (started && cloudToken) cloudSave();
+}, 20000);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && cloudToken) cloudSave(true);
+});
+window.addEventListener('pagehide', () => {
+  if (cloudToken) cloudSave(true);
+});
+
 // 调试 / 截图：?still 直接站进草原
 if (new URLSearchParams(location.search).has('still')) {
   started = true;
@@ -3751,6 +4145,34 @@ if (new URLSearchParams(location.search).has('still')) {
   if (p.has('menu')) {
     setTimeout(() => openMenu(), 900);
     if (p.has('panel')) setTimeout(() => showPanel(p.get('panel')), 1200);
+  }
+
+  // 调试：?selftest 跑一遍菜单 + 改键的完整链路，结果写进标题
+  if (p.has('selftest')) {
+    setTimeout(() => {
+      const log = [];
+      try {
+        openMenu();
+        log.push('menu=' + pauseEl.classList.contains('show'));
+        document.getElementById('btn-keys').click();
+        log.push('panel=' + (document.querySelector('.panel.on') || {}).id);
+        const btn = document.querySelector('.bind-key[data-bind="forward"]');
+        btn.click();
+        log.push('listen=' + (btn.textContent === '按下新键…'));
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyI', key: 'i', bubbles: true }));
+        log.push('bound=' + binds.forward);
+        log.push('label=' + btn.textContent);
+        document.getElementById('btn-save').click();
+        log.push('tip=' + menuTipEl.classList.contains('on'));
+        closeMenu();
+        log.push('closed=' + !pauseEl.classList.contains('show'));
+        log.push('err=' + window.__err.length);
+      } catch (e) {
+        log.push('EX:' + e.message);
+      }
+      document.title = log.join(' | ');
+      if (menuTipEl) menuTipEl.textContent = 'SELFTEST ' + log.join(' | ');
+    }, 1800);
   }
 
   // 截图取景：把镜头和一只动物摆到固定位置，方便检查建模
