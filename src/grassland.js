@@ -2164,6 +2164,39 @@ function buildChunk(cx, cz, ring) {
     group.add(lowMesh);
   }
 
+  /* 花根下的绿叶地毯：矮、宽、密，专门用来盖住花茎之间露出来的土 */
+  if (seaK > 0.12) {
+    const leafCount = Math.round(seaK * 3000);
+    const leafGeo = cloverGeoBase.clone();
+    const leafMesh = new THREE.InstancedMesh(leafGeo, cloverMaterial, leafCount);
+    const leafPhases = new Float32Array(leafCount);
+    const leafStiffs = new Float32Array(leafCount);
+    const greens = [0x6f8c3c, 0x7d9a45, 0x64803a, 0x88a24f, 0x5d7636];
+    for (let i = 0; i < leafCount; i++) {
+      const x = baseX + rand() * CHUNK;
+      const z = baseZ + rand() * CHUNK;
+      const y = heightAt(x, z);
+      const sea = seaAt(x, z);
+      const show = sea > 0.3;
+      dummy.position.set(x, show ? y + 0.03 : -999, z);
+      // 平铺在地上（不是竖着插），一片就能盖住半平米
+      dummy.rotation.set(-Math.PI / 2 + (rand() - 0.5) * 0.22, rand() * TAU, 0);
+      const wide = 0.5 + rand() * 0.42;
+      dummy.scale.set(wide, show ? wide * (0.8 + rand() * 0.4) : 0.0001, wide);
+      dummy.updateMatrix();
+      leafMesh.setMatrixAt(i, dummy.matrix);
+      leafMesh.setColorAt(i, tmpColor.setHex(greens[Math.floor(rand() * greens.length)])
+        .offsetHSL((rand() - 0.5) * 0.02, 0, (rand() - 0.5) * 0.06));
+      leafPhases[i] = rand() * TAU;
+      leafStiffs[i] = 0.35 + rand() * 0.3;
+    }
+    leafGeo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(leafPhases, 1));
+    leafGeo.setAttribute('aStiff', new THREE.InstancedBufferAttribute(leafStiffs, 1));
+    leafMesh.computeBoundingSphere();
+    leafMesh.frustumCulled = false;
+    group.add(leafMesh);
+  }
+
   /* 落花：被风吹下来的花瓣，铺在花根之间，近看才有的一层细节 */
   if (seaK > 0.08) {
     const petalCount = Math.round(seaK * 900);
