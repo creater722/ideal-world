@@ -2952,7 +2952,7 @@ const fireflyMat = new THREE.ShaderMaterial({
       float pulse = 0.5 + 0.5 * sin(uTime * (1.2 + aCluster * 0.19) + aCluster * 2.3 + aKick * 0.55);
       vGlow = 0.12 + 0.88 * pow(pulse, 2.4);
       vHue = mix(vec3(0.56, 1.0, 0.32), vec3(1.0, 0.92, 0.52), fract(aPhase * 7.3));
-      gl_PointSize = aSize * uPixelRatio * 62.0 / max(-mv.z, 0.5);
+      gl_PointSize = aSize * uPixelRatio * 48.0 / max(-mv.z, 0.5);
     }
   `,
   fragmentShader: /* glsl */ `
@@ -2966,7 +2966,9 @@ const fireflyMat = new THREE.ShaderMaterial({
       glow = pow(glow, 2.2);
       float a = glow * vGlow * uOpacity;
       if (a < 0.003) discard;
-      gl_FragColor = vec4(vHue * a * 2.4, a);
+      // 亮度别给太满：加法混合下 1200 个点叠在一起，核会先炸成白团，
+      // 光晕交给 Bloom 去做，核留一点绿黄
+      gl_FragColor = vec4(vHue * a * 1.35, a);
     }
   `,
 });
@@ -5077,7 +5079,7 @@ function applyTime() {
   hemiLight.color.copy(s.hemiSky);
   hemiLight.groundColor.copy(s.hemiGround);
   hemiLight.intensity = s.hemiI;
-  moonLight.intensity = s.night * 0.55;
+  moonLight.intensity = s.night * 0.68;
   renderer.toneMappingExposure = s.expo;
 
   sharedUniforms.uSunDir.value.copy(SUN_DIR);

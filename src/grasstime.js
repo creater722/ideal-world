@@ -11,7 +11,7 @@ import { clamp, lerp, smoothstep } from './grasscore.js';
    这样从出生点望向农场时是顺光，草和羊都是亮的；
    黄昏的暖边留在身后，转身就能看见。 */
 export const TIME_KEYS = [
-  { h: 0.0, elev: -26, az: 84, sun: 0x8fa6c6, sunI: 0.07, zenith: 0x051224, horizon: 0x122642, haze: 0x1c2a3a, cloud: 0x33445a, fog: 0x121b26, fogD: 0.0072, hemiSky: 0x1b2a42, hemiGround: 0x0c1109, hemiI: 0.32, expo: 1.05, cover: 0.30 },
+  { h: 0.0, elev: -26, az: 84, sun: 0x8fa6c6, sunI: 0.07, zenith: 0x051224, horizon: 0x122642, haze: 0x1c2a3a, cloud: 0x33445a, fog: 0x121b26, fogD: 0.0072, hemiSky: 0x1b2a42, hemiGround: 0x141d15, hemiI: 0.40, expo: 1.05, cover: 0.30 },
   { h: 4.9, elev: -7, az: 62, sun: 0xb9877a, sunI: 0.12, zenith: 0x152846, horizon: 0x53607a, haze: 0x6c6374, cloud: 0x69718a, fog: 0x2f3947, fogD: 0.0070, hemiSky: 0x2f4262, hemiGround: 0x121810, hemiI: 0.42, expo: 1.03, cover: 0.42 },
   { h: 6.3, elev: 3, az: 112, sun: 0xffb07a, sunI: 0.9, zenith: 0x35608f, horizon: 0xffbe93, haze: 0xffc9a2, cloud: 0xffc9b0, fog: 0xd2a68c, fogD: 0.0068, hemiSky: 0x7a8db2, hemiGround: 0x2a3220, hemiI: 0.6, expo: 1.02, cover: 0.5 },
   { h: 8.8, elev: 33, az: 122, sun: 0xffe8bc, sunI: 2.7, zenith: 0x3e81c6, horizon: 0xf6edd4, haze: 0xffe4bd, cloud: 0xfff9ef, fog: 0xd9dcc9, fogD: 0.0058, hemiSky: 0xb7d2ef, hemiGround: 0x53622c, hemiI: 0.92, expo: 1.02, cover: 0.4 },
@@ -24,7 +24,7 @@ export const TIME_KEYS = [
   { h: 19.8, elev: -2, az: 168, sun: 0xff7d45, sunI: 0.7, zenith: 0x334e84, horizon: 0xff8878, haze: 0xff6f58, cloud: 0xf3a98c, fog: 0xcc9578, fogD: 0.0074, hemiSky: 0x66779c, hemiGround: 0x2e2a1b, hemiI: 0.5, expo: 1.0, cover: 0.46 },
   { h: 20.7, elev: -8, az: 172, sun: 0xe98a68, sunI: 0.22, zenith: 0x1f3a68, horizon: 0x8f6478, haze: 0x9a6580, cloud: 0x8a7680, fog: 0x7c5b56, fogD: 0.0076, hemiSky: 0x44567a, hemiGround: 0x1d2216, hemiI: 0.48, expo: 1.02, cover: 0.4 },
   { h: 21.7, elev: -17, az: 62, sun: 0x9fb6d8, sunI: 0.1, zenith: 0x0a1c38, horizon: 0x1d3352, haze: 0x2a3c52, cloud: 0x44556b, fog: 0x1e2e40, fogD: 0.0072, hemiSky: 0x3a5478, hemiGround: 0x121810, hemiI: 0.5, expo: 1.04, cover: 0.34 },
-  { h: 23.3, elev: -25, az: 68, sun: 0x8fa6c6, sunI: 0.07, zenith: 0x061428, horizon: 0x132845, haze: 0x1e2c3d, cloud: 0x36475c, fog: 0x141d27, fogD: 0.0071, hemiSky: 0x2a405e, hemiGround: 0x0e1410, hemiI: 0.46, expo: 1.05, cover: 0.3 },
+  { h: 23.3, elev: -25, az: 68, sun: 0x8fa6c6, sunI: 0.07, zenith: 0x061428, horizon: 0x132845, haze: 0x1e2c3d, cloud: 0x36475c, fog: 0x141d27, fogD: 0.0071, hemiSky: 0x2a405e, hemiGround: 0x18211a, hemiI: 0.52, expo: 1.05, cover: 0.3 },
 ];
 
 for (const k of TIME_KEYS) {
@@ -120,7 +120,7 @@ export function createTimeOfDay(startHour = 16.4) {
     state.hemiGround.lerpColors(a.cHemiGround, b.cHemiGround, t);
     state.sunI = lerp(a.sunI, b.sunI, t);
     state.hemiI = lerp(a.hemiI, b.hemiI, t) * 1.08;
-    state.fogD = lerp(a.fogD, b.fogD, t) * 0.78;
+    state.fogD = lerp(a.fogD, b.fogD, t) * 0.86;
     state.expo = lerp(a.expo, b.expo, t) * 1.06;
     state.elev = lerp(a.elev, b.elev, t);
     state.az = lerp(a.az, b.az, t);

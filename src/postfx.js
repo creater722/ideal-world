@@ -141,9 +141,9 @@ export function createPostFX(renderer, scene, camera) {
 
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(size.x, size.y),
-    0.16,   // strength：只要一点光晕，不要雾
-    0.58,   // radius
-    1.15    // threshold：只让太阳、水面反光、萤火虫冒出来
+    0.26,   // strength：光晕铺开，萤火虫才有外圈
+    0.62,   // radius
+    1.02    // threshold：HDR 线性空间里的门槛，再低会把阳光下的草地也点着
   );
   composer.addPass(bloom);
 
