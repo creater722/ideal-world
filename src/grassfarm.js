@@ -71,6 +71,23 @@ function makeWoodTexture(base, dark, light) {
   return tex;
 }
 
+function makeSmokeTexture() {
+  const S = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = S;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(S / 2, S / 2, 2, S / 2, S / 2, S / 2);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.34, 'rgba(255,255,255,0.82)');
+  g.addColorStop(0.68, 'rgba(255,255,255,0.34)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S, S);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function makeSoilTexture() {
   const S = 256;
   const c = document.createElement('canvas');
@@ -1888,6 +1905,144 @@ export function createFarm(scene) {
     box(bench, 0.07, 0.5, 0.07, woodMat, s * 0.62, 0.7, -0.19);
   }
 
+  /* ---------- 有人住过的痕迹 ---------- */
+  // 长凳上的马灯
+  box(bench, 0.14, 0.19, 0.14, lanternMat, 0.46, 0.56, 0.02, 0, 0, false);
+  box(bench, 0.18, 0.04, 0.18, M.dark, 0.46, 0.675, 0.02, 0, 0, false);
+
+  // 门廊彩灯串：两根木桩，中间一根下垂的线，挂一排小灯
+  const bulbMat = new THREE.MeshStandardMaterial({
+    color: 0xfff2cf,
+    emissive: 0xffbe63,
+    emissiveIntensity: 0.12,
+    roughness: 0.4,
+  });
+  const postXs = [fx - 7.2, fx - 4.0];
+  const postZ = fz + 1.5;
+  for (const px of postXs) {
+    box(root, 0.09, 2.32, 0.09, M.dark, px, FARM.y + 1.16, postZ);
+    box(root, 0.2, 0.05, 0.2, M.dark, px, FARM.y + 2.34, postZ, 0, 0, false);
+  }
+  const wirePts = [];
+  const bulbGeo = new THREE.SphereGeometry(0.045, 8, 6);
+  const BULBS = 9;
+  for (let i = 0; i <= BULBS; i++) {
+    const t = i / BULBS;
+    const x = postXs[0] + (postXs[1] - postXs[0]) * t;
+    const y = FARM.y + 2.3 - Math.sin(t * Math.PI) * 0.42;
+    wirePts.push(new THREE.Vector3(x, y, postZ));
+    if (i > 0 && i < BULBS) {
+      const b = new THREE.Mesh(bulbGeo, bulbMat);
+      b.position.set(x, y - 0.07, postZ);
+      b.castShadow = false;
+      root.add(b);
+    }
+  }
+  root.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(wirePts),
+    new THREE.LineBasicMaterial({ color: 0x2b2420 })
+  ));
+  const porchLight = new THREE.PointLight(0xffb45a, 0, 12, 2);
+  porchLight.position.set((postXs[0] + postXs[1]) / 2, FARM.y + 1.85, postZ);
+  porchLight.userData.base = 1.6;
+  nightLights.push(porchLight);
+  root.add(porchLight);
+
+  // 谷仓门口：南瓜堆、木箱、木桶
+  const patchPumpkinMat = new THREE.MeshStandardMaterial({ color: 0xd9782c, roughness: 0.72 });
+  const scarecrowStrawMat = new THREE.MeshStandardMaterial({ color: 0xc9ae63, roughness: 1 });
+  for (const [px, pz, r] of [
+    [BARN.cx - 3.0, BARN.cz + 3.0, 0.3],
+    [BARN.cx - 2.42, BARN.cz + 3.2, 0.21],
+    [BARN.cx - 2.78, BARN.cz + 2.52, 0.18],
+  ]) {
+    const p = new THREE.Mesh(A.sphere, patchPumpkinMat);
+    p.scale.set(r, r * 0.76, r);
+    p.position.set(px, FARM.y + r * 0.7, pz);
+    p.castShadow = true;
+    p.receiveShadow = true;
+    root.add(p);
+    const st = new THREE.Mesh(A.cylGeo, M.dark);
+    st.scale.set(0.05, 0.12, 0.05);
+    st.position.set(px, FARM.y + r * 1.42, pz);
+    root.add(st);
+  }
+  const crate = new THREE.Group();
+  crate.position.set(BARN.cx + 3.1, FARM.y, BARN.cz + 2.8);
+  crate.rotation.y = 0.4;
+  root.add(crate);
+  box(crate, 0.62, 0.46, 0.5, M.dark, 0, 0.23, 0);
+  box(crate, 0.66, 0.05, 0.54, M.cream, 0, 0.47, 0, 0, 0, false);
+
+  const barrel = new THREE.Group();
+  barrel.position.set(BARN.cx + 3.7, FARM.y, BARN.cz + 3.5);
+  root.add(barrel);
+  const barrelMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.24, 0.62, 12), M.dark);
+  barrelMesh.position.y = 0.31;
+  barrelMesh.castShadow = true;
+  barrelMesh.receiveShadow = true;
+  barrel.add(barrelMesh);
+  for (const hy of [0.12, 0.5]) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.268, 0.014, 5, 14), M.gold);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = hy;
+    barrel.add(ring);
+  }
+
+  // 稻草人：立在菜畦边上，草帽、草手、草裙都会随风动
+  const scare = new THREE.Group();
+  scare.position.set(fx + 7.4, FARM.y, fz + 1.4);
+  scare.rotation.y = -0.35;
+  root.add(scare);
+  box(scare, 0.1, 1.95, 0.1, M.dark, 0, 0.97, 0);
+  box(scare, 1.4, 0.08, 0.08, M.dark, 0, 1.44, 0);
+  box(scare, 0.56, 0.64, 0.3, M.cream, 0, 1.14, 0);              // 上身
+  box(scare, 0.5, 0.26, 0.28, scarecrowStrawMat, 0, 0.72, 0);     // 草裙
+  box(scare, 0.58, 0.05, 0.31, M.rope, 0, 1.08, 0, 0, 0, false);  // 腰带
+  sphere(scare, 0.155, scarecrowStrawMat, 0, 1.66, 0, 1, 1.02, 1);
+  const scareBrim = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.022, 16), M.hay);
+  scareBrim.position.set(0, 1.775, 0);
+  scareBrim.castShadow = true;
+  scare.add(scareBrim);
+  const scareHat = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.16, 12), M.hay);
+  scareHat.position.set(0, 1.865, 0);
+  scareHat.castShadow = true;
+  scare.add(scareHat);
+  const ribbons = [];
+  for (const s of [-1, 1]) {
+    ribbons.push(box(scare, 0.34, 0.07, 0.02, scarecrowStrawMat, s * 0.74, 1.41, 0, 0, s * 0.2, false));
+    const hand = new THREE.Mesh(A.sphere, scarecrowStrawMat);
+    hand.scale.setScalar(0.075);
+    hand.position.set(s * 0.66, 1.44, 0);
+    scare.add(hand);
+  }
+
+  // 门口的信箱
+  const mail = new THREE.Group();
+  mail.position.set(fx - 4.6, FARM.y, fz + hz + 1.2);
+  root.add(mail);
+  box(mail, 0.09, 1.12, 0.09, M.dark, 0, 0.56, 0);
+  box(mail, 0.3, 0.22, 0.46, M.cream, 0, 1.18, 0);
+  box(mail, 0.33, 0.04, 0.49, M.red, 0, 1.3, 0, 0, 0, false);
+  box(mail, 0.045, 0.15, 0.045, M.red, 0.17, 1.24, 0.12, 0, 0, false);
+
+  // 烟囱与炊烟
+  box(barn, 0.44, 1.25, 0.44, M.stone, 0, 5.5, -1.4);
+  box(barn, 0.54, 0.08, 0.54, M.dark, 0, 6.16, -1.4, 0, 0, false);
+  const smokeTex = makeSmokeTexture();
+  const smokes = [];
+  for (let i = 0; i < 7; i++) {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: smokeTex,
+      transparent: true,
+      depthWrite: false,
+      color: 0x8b8478,
+      opacity: 0,
+    }));
+    barn.add(sp);
+    smokes.push({ sprite: sp, t: i / 7 });
+  }
+
   // 谷仓正面的窗台花箱
   const flowerMats = [
     new THREE.MeshStandardMaterial({ color: 0xd8583c, roughness: 0.8 }),
@@ -2122,6 +2277,30 @@ export function createFarm(scene) {
     }
     motes.rotation.y = t * 0.018;
     motes.position.y = Math.sin(t * 0.3) * 0.05;
+
+    // 炊烟：从烟囱口一缕缕升起来，被风带偏
+    for (const sm of smokes) {
+      sm.t += dt * 0.15;
+      if (sm.t > 1) sm.t -= 1;
+      const k = sm.t;
+      sm.sprite.position.set(
+        Math.sin(k * 6.2 + t * 0.55) * 0.24 + k * 1.6,
+        6.22 + k * 3.4,
+        -1.4 + k * 0.9
+      );
+      const sc = 0.72 + k * 2.7;
+      sm.sprite.scale.set(sc, sc, 1);
+      sm.sprite.material.opacity = 0.85 * Math.sin(Math.PI * Math.min(1, k * 1.02));
+    }
+
+    // 彩灯随着天黑慢慢亮起来，再轻轻呼吸
+    const glowK = Math.max(0, (lanternMat.emissiveIntensity - 0.25) / 2.0);
+    bulbMat.emissiveIntensity = 0.12 + glowK * (2.2 + Math.sin(t * 2.1) * 0.22 + Math.sin(t * 5.3) * 0.1);
+
+    // 稻草人手里的稻草随风摆
+    for (let i = 0; i < ribbons.length; i++) {
+      ribbons[i].rotation.z = (i === 0 ? 1 : -1) * (0.22 + Math.sin(t * 2.7 + i * 1.9) * 0.2);
+    }
 
     // 打水的木桶：放下去，再提上来
     if (wellDrawT < 1) {
@@ -2359,6 +2538,7 @@ export function createFarm(scene) {
     const k = clamp(v, 0, 1);
     M.glass.emissiveIntensity = k * 1.7;
     lanternMat.emissiveIntensity = 0.25 + k * 2.0;
+    bulbMat.emissiveIntensity = 0.12 + k * 2.3;
     for (const l of nightLights) {
       const level = (l.userData.dayBase || 0) + k * (l.userData.base || 1);
       l.intensity = level;
