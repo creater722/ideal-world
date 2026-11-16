@@ -16,6 +16,53 @@ import { createTimeOfDay, phaseName, formatClock } from './grasstime.js';
 import { createFarm, CROPS } from './grassfarm.js';
 import { createHerd } from './grassanimals.js';
 
+/* ---------------------------------------------------------
+   去雪山的路上：一条花海走廊，草在这条带子里让位给花
+   --------------------------------------------------------- */
+const FLOWER_ROAD = [
+  [17.0, -15.0],
+  [14.5, 14.0],
+  [9.5, 74.0],
+  [4.5, 142.0],
+  [1.5, 206.0],
+  [0.0, 262.0],
+];
+
+function flowerRoadFactor(x, z) {
+  if (z < -24 || z > 290) return 0;
+  let best = 1e9;
+  let hitZ = z;
+  for (let i = 0; i < FLOWER_ROAD.length - 1; i++) {
+    const ax = FLOWER_ROAD[i][0];
+    const az = FLOWER_ROAD[i][1];
+    const bx = FLOWER_ROAD[i + 1][0];
+    const bz = FLOWER_ROAD[i + 1][1];
+    const abx = bx - ax;
+    const abz = bz - az;
+    const len2 = abx * abx + abz * abz || 1;
+    const t = clamp(((x - ax) * abx + (z - az) * abz) / len2, 0, 1);
+    const px = ax + abx * t;
+    const pz = az + abz * t;
+    const d = Math.hypot(x - px, z - pz);
+    if (d < best) {
+      best = d;
+      hitZ = pz;
+    }
+  }
+  // 越靠近雪山越宽：山脚下摊成一整片海
+  const along = clamp((hitZ + 15) / 277, 0, 1);
+  const wobble = (valueNoise(x * 0.031 + 17.3, z * 0.031 - 6.1) - 0.5) * 12;
+  const halfW = 6.5 + along * 30 + wobble;
+  return smoothstep(halfW, halfW * 0.52, best);
+}
+
+/* 圆圈花海 + 走廊花海，取更满的那个 */
+function seaAt(x, z) {
+  const a = flowerSeaFactor(x, z);
+  const b = flowerRoadFactor(x, z);
+  return b > a ? b : a;
+}
+
 /* =========================================================
    0. 基本设置
    ========================================================= */
@@ -1022,7 +1069,7 @@ let terrainMesh = null;
     if (far > 0) col.lerp(hillTone, far * 0.5);
 
     // 花海：地面先暗成深绿，再被大片同色的花染上颜色
-    const sea = flowerSeaFactor(x, z);
+    const sea = seaAt(x, z);
     seaArr[i] = sea;
     if (sea > 0.002) {
       col.lerp(seaFloor, sea * 0.26);
@@ -1090,8 +1137,8 @@ let terrainMesh = null;
         [
           '#include <map_fragment>',
           'if (vSea > 0.01) {',
-          '  vec2 fp1 = vCloudPos.xz * 0.145;',
-          '  vec2 fp2 = vCloudPos.xz * 0.058 + vec2(0.37, 0.19);',
+          '  vec2 fp1 = vCloudPos.xz * 0.28;',
+          '  vec2 fp2 = vCloudPos.xz * 0.105 + vec2(0.37, 0.19);',
           '  vec4 p1 = texture2D(uPetalMap, fp1);',
           '  vec4 p2 = texture2D(uPetalMap, fp2);',
           '  float pa = clamp(p1.a + p2.a * 0.72, 0.0, 1.0);',
@@ -1116,6 +1163,149 @@ let terrainMesh = null;
   terrainMesh.receiveShadow = true;
   scene.add(terrainMesh);
 }
+
+/* =========================================================
+   4.6 远处的雪山
+   ========================================================= */
+/* 远处的雪山：画出来的一张山脊图，贴在一块朝向镜头的板子上。
+   远处的山本来就看不出体积，画出来的轮廓反而最像。 */
+function makeSnowRangeTexture() {
+  const W = 2048;
+  const H = 512;
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext('2d');
+  const rnd = mulberry32(778899);
+
+  // 一串高低不一的尖峰：三角形叠加，轮廓才有山的样子
+  const makeRidge = (seed, count, amp, lift) => {
+    const r = mulberry32(seed * 977);
+    const peaks = [];
+    for (let i = 0; i < count; i++) {
+      peaks.push({
+        c: (i + 0.5) / count + (r() - 0.5) * 0.07,
+        h: 0.5 + r() * 0.5,
+        w: 0.085 + r() * 0.07,
+      });
+    }
+    return (t) => {
+      let v = 0;
+      for (const p of peaks) {
+        const d = Math.abs(t - p.c) / p.w;
+        if (d < 1) v = Math.max(v, p.h * Math.pow(1 - d, 1.4));
+      }
+      v += Math.sin(t * 63 + seed) * 0.018 + Math.sin(t * 137 + seed * 3) * 0.008;
+      return H * (1 - (lift + amp * v));
+    };
+  };
+
+  const dropLayer = (seed, count, amp, lift, pale, rock, snowDensity) => {
+    const ridgeAt = makeRidge(seed, count, amp, lift);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    for (let x = 0; x <= W; x += 3) ctx.lineTo(x, ridgeAt(x / W));
+    ctx.lineTo(W, H);
+    ctx.closePath();
+
+    const g = ctx.createLinearGradient(0, H * (1 - lift - amp), 0, H * 1.02);
+    g.addColorStop(0, pale);
+    g.addColorStop(0.14, pale);
+    g.addColorStop(0.30, rock);
+    g.addColorStop(0.62, '#4a5450');
+    g.addColorStop(1, '#333b38');
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.clip();
+
+    for (let i = 0; i < snowDensity; i++) {
+      const x = rnd() * W;
+      const top = ridgeAt(x / W);
+      const y = top + rnd() * (H * 0.30);
+      const r = 12 + rnd() * 54;
+      ctx.fillStyle = `rgba(255,255,255,${0.06 + rnd() * 0.16})`;
+      ctx.beginPath();
+      ctx.ellipse(x, y, r, r * 0.42, 0, 0, TAU);
+      ctx.fill();
+    }
+    for (let i = 0; i < 150; i++) {
+      const x = rnd() * W;
+      const top = ridgeAt(x / W);
+      const y = top + H * 0.24 + rnd() * (H * 0.3);
+      ctx.strokeStyle = `rgba(30,40,48,${0.03 + rnd() * 0.07})`;
+      ctx.lineWidth = 2 + rnd() * 9;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + (rnd() - 0.5) * 24, y + 40 + rnd() * 90);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  dropLayer(2.1, 8, 0.28, 0.46, '#e6eefa', '#9dabbd', 300);
+  dropLayer(5.7, 7, 0.24, 0.34, '#dfe9f8', '#7d8b9e', 260);
+  dropLayer(9.3, 6, 0.20, 0.22, '#d7e4f7', '#5f6c7c', 220);
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  return tex;
+}
+
+function buildSnowRange() {
+  const mat = new THREE.MeshBasicMaterial({
+    map: makeSnowRangeTexture(),
+    transparent: true,
+    depthWrite: false,
+    fog: false,
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2600, 640), mat);
+  mesh.position.set(0, 190, 980);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = -1;
+  scene.add(mesh);
+  return { mesh, mat };
+}
+
+const snowRange = buildSnowRange();
+
+/* 山脚的雾带：一条竖直渐隐的雾幕，把雪山和地面接起来 */
+function makeHazeVeilTexture() {
+  const S = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = S;
+  canvas.height = S;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createLinearGradient(0, S, 0, 0);
+  g.addColorStop(0, 'rgba(255,255,255,0.96)');
+  g.addColorStop(0.32, 'rgba(255,255,255,0.7)');
+  g.addColorStop(0.66, 'rgba(255,255,255,0.24)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S, S);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const hazeVeilMat = new THREE.MeshBasicMaterial({
+  map: makeHazeVeilTexture(),
+  transparent: true,
+  depthWrite: false,
+  fog: false,
+  color: 0xd9e2ec,
+  opacity: 0.95,
+  side: THREE.DoubleSide,
+});
+const hazeVeil = new THREE.Mesh(new THREE.PlaneGeometry(2200, 320), hazeVeilMat);
+hazeVeil.position.set(0, 100, 840);
+hazeVeil.rotation.y = Math.PI;
+hazeVeil.frustumCulled = false;
+scene.add(hazeVeil);
+
 
 /* =========================================================
    5. 土路
@@ -1590,7 +1780,7 @@ const grassPalette = [0xdfe2ad, 0xccd595, 0xe7e8c0, 0xc0cb8c, 0xe1e4b5, 0xb9c57f
 const flowerPalettes = [
   [0xffffff, 0xf8f5e6, 0xfffdf6],
   [0xf6d268, 0xefc65a, 0xf9db78],
-  [0xf3bcca, 0xeeabc0, 0xf7cbd6],
+  [0xf2c6d4, 0xe9b2c6, 0xf6d6e0],
   [0xfff8f4, 0xfbecef, 0xfffdfa],
   [0xb8ccef, 0xa9c0ea, 0xcadaf5],
   [0xd8583c, 0xcb4a33, 0xe26848],
@@ -1608,17 +1798,17 @@ function buildChunk(cx, cz, ring) {
 
   // 这个区块压到花海多少：中间最满，边上渐薄
   const seaK = Math.max(
-    flowerSeaFactor(baseX + CHUNK * 0.5, baseZ + CHUNK * 0.5),
-    flowerSeaFactor(baseX + 3, baseZ + 3),
-    flowerSeaFactor(baseX + CHUNK - 3, baseZ + 3),
-    flowerSeaFactor(baseX + 3, baseZ + CHUNK - 3),
-    flowerSeaFactor(baseX + CHUNK - 3, baseZ + CHUNK - 3)
+    seaAt(baseX + CHUNK * 0.5, baseZ + CHUNK * 0.5),
+    seaAt(baseX + 3, baseZ + 3),
+    seaAt(baseX + CHUNK - 3, baseZ + 3),
+    seaAt(baseX + 3, baseZ + CHUNK - 3),
+    seaAt(baseX + CHUNK - 3, baseZ + CHUNK - 3)
   );
 
   const tuftCount = ringCount(ring, [5000, 4300, 3200, 1800]);
   const flowerCount = ringCount(ring, [1100, 980, 770, 450]) + Math.round(seaK * 3000);
   const seedCount = ringCount(ring, [280, 250, 190, 110]);
-  const cloverCount = ringCount(ring, [830, 750, 590, 350]);
+  const cloverCount = Math.max(100, ringCount(ring, [830, 750, 590, 350]) - Math.round(seaK * 620));
 
   /* 草 */
   const tuftGeo = tuftGeoBase.clone();
@@ -1646,10 +1836,10 @@ function buildChunk(cx, cz, ring) {
     dummy.position.set(x, y, z);
     dummy.rotation.set((rand() - 0.5) * 0.16, rand() * TAU, (rand() - 0.5) * 0.16);
     const width = 0.56 + rand() * 0.36;
-    const sea = flowerSeaFactor(x, z);
+    const sea = seaAt(x, z);
     // 花海里的草被花盖住大半，留短一点，花才立得出来
     const tall = (0.38 + rand() * 0.30) * (0.84 + vitality * 0.42)
-      * grazeFactor(x, z) * farmMowFactor(x, z) * (1 - sea * 0.42);
+      * grazeFactor(x, z) * farmMowFactor(x, z) * (1 - sea * 0.92);
     dummy.scale.set(width, tall, width);
     dummy.updateMatrix();
     grassMesh.setMatrixAt(i, dummy.matrix);
@@ -1721,8 +1911,9 @@ function buildChunk(cx, cz, ring) {
     const z = baseZ + rand() * CHUNK;
     const y = heightAt(x, z);
     const boost = meadowBoost(x, z);
+    const sea = seaAt(x, z);
     const blocked = pathDistance(x, z) < 1.15 || insideFarmWork(x, z, 0.2);
-    if (blocked || rand() > 0.62 + boost * 0.38) {
+    if (blocked || rand() > 0.62 + boost * 0.38 - sea * 0.26) {
       dummy.position.set(x, -999, z);
       dummy.scale.setScalar(0.0001);
       dummy.updateMatrix();
@@ -1735,13 +1926,13 @@ function buildChunk(cx, cz, ring) {
 
     dummy.position.set(x, y, z);
     dummy.rotation.set((rand() - 0.5) * 0.12, rand() * TAU, (rand() - 0.5) * 0.12);
-    const w = 0.34 + rand() * 0.3;
+    const w = (0.28 + rand() * 0.24) * (1 - sea * 0.5);
     const h = (0.1 + rand() * 0.12) * grazeFactor(x, z) * farmMowFactor(x, z);
     dummy.scale.set(w, h, w);
     dummy.updateMatrix();
     cloverMesh.setMatrixAt(i, dummy.matrix);
     tmpColor.setHex([0x9fb96b, 0x89aa58, 0xb2c982, 0x7f9e50][Math.floor(rand() * 4)])
-      .offsetHSL((rand() - 0.5) * 0.02, 0, (rand() - 0.5) * 0.04);
+      .offsetHSL((rand() - 0.5) * 0.02, 0, (rand() - 0.5) * 0.04 + sea * 0.04);
     cloverMesh.setColorAt(i, tmpColor);
     cloverPhases[i] = rand() * TAU;
     cloverStiffs[i] = 0.5 + rand() * 0.4;
@@ -1767,7 +1958,7 @@ function buildChunk(cx, cz, ring) {
 
     const boost = meadowBoost(x, z);
     const keep = 0.42 + boost * 0.58;
-    let sea = flowerSeaFactor(x, z);
+    let sea = seaAt(x, z);
     const inYard = Math.abs(x - FARM.x) < FARM.halfX - 0.6 && Math.abs(z - FARM.z) < FARM.halfZ - 0.6;
     const blocked = pathDistance(x, z) < 1.25 || insideFarmWork(x, z, 0.25) || (inYard && rand() < 0.6);
     // 花海里几乎不留空：能开的地方都开满
@@ -1810,13 +2001,13 @@ function buildChunk(cx, cz, ring) {
       x = baseX + rand() * CHUNK;
       z = baseZ + rand() * CHUNK;
       y = heightAt(x, z);
-      sea = flowerSeaFactor(x, z);
+      sea = seaAt(x, z);
     }
 
     const tall = rand() < 0.12;
-    const stemH = (tall ? 0.52 + rand() * 0.22 : 0.26 + rand() * 0.15) * (1 + sea * 0.20);
+    const stemH = (tall ? 0.52 + rand() * 0.22 : 0.26 + rand() * 0.15) * (1 + sea * 0.50);
     const headSize = ((kind === 3 || kind === 4 || kind === 5 ? 0.17 : tall ? 0.165 : 0.12) + rand() * 0.04)
-      * (1 + sea * 0.24);
+      * (1 + sea * 0.32);
     const phase = rand() * TAU;
 
     dummy.position.set(x, y, z);
@@ -1870,6 +2061,42 @@ function buildChunk(cx, cz, ring) {
     group.add(mesh);
   }
 
+  /* 花海底层的碎花：矮矮地贴在地面，把花茎之间的缝补满 */
+  if (seaK > 0.05) {
+    const lowCount = Math.round(seaK * 3000);
+    const lowGeo = headGeoBase.clone();
+    const lowMesh = new THREE.InstancedMesh(lowGeo, flowerMaterials[3], lowCount);
+    const lowPhases = new Float32Array(lowCount);
+    const lowStiffs = new Float32Array(lowCount);
+    const lowTints = [
+      [0xf3bcca, 0xeeabc0], [0xfff8f4, 0xfbecef], [0xd8583c],
+      [0xb8ccef], [0xf6d268], [0xffffff],
+    ];
+    for (let i = 0; i < lowCount; i++) {
+      const x = baseX + rand() * CHUNK;
+      const z = baseZ + rand() * CHUNK;
+      const y = heightAt(x, z);
+      const sea = seaAt(x, z);
+      const show = sea > 0.22;
+      dummy.position.set(x, show ? y + 0.10 + rand() * 0.24 : -999, z);
+      dummy.rotation.set((rand() - 0.5) * 0.5, rand() * TAU, (rand() - 0.5) * 0.5);
+      dummy.scale.setScalar((0.13 + rand() * 0.10) * (show ? 1 : 0.0001));
+      dummy.updateMatrix();
+      lowMesh.setMatrixAt(i, dummy.matrix);
+      const zone = fbm(x * 0.028 + 71.7, z * 0.028 - 23.4, 3);
+      const zp = zone < 0.40 ? 0 : zone < 0.55 ? 1 : zone < 0.63 ? 2 : zone < 0.72 ? 3 : zone < 0.86 ? 4 : 5;
+      const pal = lowTints[rand() < 0.82 ? zp : Math.floor(rand() * 6)];
+      lowMesh.setColorAt(i, tmpColor.setHex(pal[Math.floor(rand() * pal.length)]));
+      lowPhases[i] = rand() * TAU;
+      lowStiffs[i] = 0.75 + rand() * 0.3;
+    }
+    lowGeo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(lowPhases, 1));
+    lowGeo.setAttribute('aStiff', new THREE.InstancedBufferAttribute(lowStiffs, 1));
+    lowMesh.computeBoundingSphere();
+    lowMesh.frustumCulled = false;
+    group.add(lowMesh);
+  }
+
   /* 落花：被风吹下来的花瓣，铺在花根之间，近看才有的一层细节 */
   if (seaK > 0.08) {
     const petalCount = Math.round(seaK * 900);
@@ -1882,7 +2109,7 @@ function buildChunk(cx, cz, ring) {
       const x = baseX + rand() * CHUNK;
       const z = baseZ + rand() * CHUNK;
       const y = heightAt(x, z);
-      const inSea = flowerSeaFactor(x, z) > 0.14;
+      const inSea = seaAt(x, z) > 0.14;
       dummy.position.set(x, inSea ? y + 0.012 : -999, z);
       dummy.rotation.set((rand() - 0.5) * 0.16, rand() * TAU, (rand() - 0.5) * 0.16);
       dummy.scale.setScalar((0.055 + rand() * 0.075) * (inSea ? 1 : 0.0001));
@@ -2069,6 +2296,54 @@ const bees = [];
       yOff: 0.45 + rand() * 0.5,
     });
   }
+}
+
+/* ---------------- 土路上的碎石：半埋在土里，近看才有的颗粒 ---------------- */
+{
+  const rand = mulberry32(6060);
+  const lines = [PATH_POINTS, INNER_PATH_POINTS];
+  const segs = [];
+  let total = 0;
+  for (const pts of lines) {
+    for (let i = 0; i < pts.length - 1; i++) {
+      const len = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+      segs.push({ a: pts[i], b: pts[i + 1], len, start: total });
+      total += len;
+    }
+  }
+
+  const COUNT = 460;
+  const geo = new THREE.IcosahedronGeometry(1, 0);
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.96, metalness: 0.0 });
+  const stones = new THREE.InstancedMesh(geo, mat, COUNT);
+  const stoneColors = [0x8b7f6b, 0x9c907a, 0x776e5d, 0xa89b83, 0x6f695c];
+  for (let i = 0; i < COUNT; i++) {
+    let pick = segs[segs.length - 1];
+    const d = rand() * total;
+    for (const s of segs) {
+      if (d >= s.start && d < s.start + s.len) { pick = s; break; }
+    }
+    const t = rand();
+    const x = pick.a[0] + (pick.b[0] - pick.a[0]) * t;
+    const z = pick.a[1] + (pick.b[1] - pick.a[1]) * t;
+    const nx = -(pick.b[1] - pick.a[1]) / pick.len;
+    const nz = (pick.b[0] - pick.a[0]) / pick.len;
+    const off = (rand() - 0.5) * 1.7;
+    const px = x + nx * off;
+    const pz = z + nz * off;
+    const big = rand() < 0.10 ? 1.6 + rand() * 0.8 : 1;
+    const s = (0.022 + rand() * 0.045) * big;
+    dummy.position.set(px, heightAt(px, pz) + s * 0.25, pz);
+    dummy.rotation.set(rand() * TAU, rand() * TAU, rand() * TAU);
+    dummy.scale.set(s, s * 0.55, s * (0.8 + rand() * 0.5));
+    dummy.updateMatrix();
+    stones.setMatrixAt(i, dummy.matrix);
+    stones.setColorAt(i, tmpColor.setHex(stoneColors[Math.floor(rand() * stoneColors.length)])
+      .offsetHSL(0, 0, (rand() - 0.5) * 0.06));
+  }
+  stones.computeBoundingSphere();
+  stones.frustumCulled = false;
+  scene.add(stones);
 }
 
 /* ---------------- 蒲公英种子：白天慢慢飘 ---------------- */
@@ -4324,6 +4599,16 @@ function applyTime() {
   pollenMat.opacity = (0.52 + duskK * 0.30) * (1 - s.night * 0.88);
   dandelionMat.opacity = (0.58 + duskK * 0.22) * (1 - s.night * 0.9);
 
+  hazeVeilMat.color.copy(s.fog);
+
+  // 雪山：白天是雪白偏冷，黄昏吃一点暖，夜里沉成深蓝
+  const sn = 1 - s.night * 0.84;
+  snowRange.mat.color.setRGB(
+    sn * (1.0 + s.dusk * 0.10),
+    sn * (1.0 + s.dusk * 0.03),
+    sn * (1.0 - s.dusk * 0.06)
+  );
+
   if (postfx) {
     postfx.grade.uniforms.uHeat.value = clamp(
       (1 - s.night) * smoothstep(9.8, 12.2, hh) * smoothstep(16.4, 13.6, hh), 0, 1
@@ -4505,7 +4790,7 @@ function updateWorld(t, dt) {
 
   // 地点名
   const inFarm = Math.abs(player.x - FARM.x) < FARM.halfX + 0.5 && Math.abs(player.z - FARM.z) < FARM.halfZ + 0.5;
-  const inSea = flowerSeaFactor(player.x, player.z) > 0.30;
+  const inSea = seaAt(player.x, player.z) > 0.30;
   const name = inFarm ? '草原农场' : inSea ? '花海' : '';
   if (name !== lastPlaceName) {
     lastPlaceName = name;
@@ -4833,7 +5118,7 @@ if (new URLSearchParams(location.search).has('still')) {
 
 window.__grass = {
   player, farm, herd, heightAt, CROPS, updatePlayer, held, playAnimalSound,
-  binds, openMenu, closeMenu, showPanel,
+  binds, openMenu, closeMenu, showPanel, time,
 };
 
 window.addEventListener('resize', () => {
