@@ -56,6 +56,12 @@ function flowerRoadFactor(x, z) {
   return smoothstep(halfW, halfW * 0.52, best);
 }
 
+/* 花海的颜色分区：沿路方向推过去的一条条色带，带子本身还会轻微摆动 */
+function seaZone(x, z) {
+  const wob = fbm(x * 0.0065 + 71.7, z * 0.0065 - 23.4, 2) * 3.4;
+  return 0.5 + 0.5 * Math.sin(z * 0.085 + wob);
+}
+
 /* 圆圈花海 + 走廊花海，取更满的那个 */
 function seaAt(x, z) {
   const a = flowerSeaFactor(x, z);
@@ -1125,7 +1131,7 @@ let terrainMesh = null;
     seaArr[i] = sea;
     if (sea > 0.002) {
       col.lerp(seaFloor, sea * 0.26);
-      const zone = fbm(x * 0.013 + 71.7, z * 0.013 - 23.4, 3);
+      const zone = seaZone(x, z);
       const tint =
         zone < 0.40 ? seaPink :
         zone < 0.55 ? seaWhite :
@@ -1319,49 +1325,41 @@ function makeSnowRangeTexture() {
     }
     ctx.filter = 'none';
 
-    // 4. 空气透视
-    ctx.globalAlpha = cfg.haze;
-    ctx.fillStyle = cfg.hazeColor;
-    ctx.fillRect(0, 0, W, H);
-    ctx.globalAlpha = 1;
+    // 4. 山脚整个化进天边的雾色里，不留一条硬底边
+    if (cfg.baseFade) {
+      const bg = ctx.createLinearGradient(0, H * 0.24, 0, H);
+      bg.addColorStop(0, 'rgba(222,232,244,0)');
+      bg.addColorStop(0.5, `rgba(222,232,244,${(cfg.baseFade * 0.55).toFixed(3)})`);
+      bg.addColorStop(1, `rgba(222,232,244,${cfg.baseFade})`);
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // 5. 空气透视
+    if (cfg.haze > 0) {
+      ctx.globalAlpha = cfg.haze;
+      ctx.fillStyle = cfg.hazeColor;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+    }
     ctx.restore();
   };
 
-  // 远 → 近：远山淡、近山更深
+  // 一整条山脉：只有一层，靠山脚渐隐做出空气透视，避免叠成三层纸片
   drawRange({
-    seed: 1.7, amp: 0.34, lift: 0.42,
+    seed: 3.7, amp: 0.40, lift: 0.26,
     peaks: [
-      { c: 0.18, h: 0.92, wl: 0.20, wr: 0.15 },
-      { c: 0.55, h: 1.0, wl: 0.22, wr: 0.18 },
-      { c: 0.86, h: 0.7, wl: 0.14, wr: 0.1 },
+      { c: 0.10, h: 0.72, wl: 0.12, wr: 0.10 },
+      { c: 0.30, h: 0.95, wl: 0.13, wr: 0.16 },
+      { c: 0.46, h: 0.62, wl: 0.08, wr: 0.09 },
+      { c: 0.63, h: 0.88, wl: 0.15, wr: 0.11 },
+      { c: 0.82, h: 0.70, wl: 0.10, wr: 0.14 },
     ],
-    rockTop: '#94a5bb', rockMid: '#6f8199', rockLow: '#657791',
-    snowHi: '#f6fafe', snowMid: '#e2ecf9', snowLow: '#c3d4e8',
-    snowDepth: 0.105, snowVar: 0.045,
-    gullyRGB: '96,114,138', gullies: 0, haze: 0.2, hazeColor: '#dfe8f4',
-  });
-  drawRange({
-    seed: 6.1, amp: 0.34, lift: 0.30,
-    peaks: [
-      { c: 0.12, h: 0.66, wl: 0.16, wr: 0.14 },
-      { c: 0.42, h: 0.95, wl: 0.18, wr: 0.16 },
-      { c: 0.74, h: 0.82, wl: 0.16, wr: 0.13 },
-    ],
-    rockTop: '#6d8098', rockMid: '#4e6280', rockLow: '#445771',
-    snowHi: '#eef5fd', snowMid: '#d3e0f2', snowLow: '#aec2da',
-    snowDepth: 0.09, snowVar: 0.04,
-    gullyRGB: '54,70,90', gullies: 0, haze: 0.11, hazeColor: '#dfe8f4',
-  });
-  drawRange({
-    seed: 11.3, amp: 0.30, lift: 0.20,
-    peaks: [
-      { c: 0.24, h: 0.62, wl: 0.17, wr: 0.15 },
-      { c: 0.62, h: 0.78, wl: 0.2, wr: 0.14 },
-    ],
-    rockTop: '#5b6f88', rockMid: '#40536d', rockLow: '#354760',
-    snowHi: '#e8f1fb', snowMid: '#c9d8ec', snowLow: '#a2b8d2',
-    snowDepth: 0.075, snowVar: 0.035,
-    gullyRGB: '38,52,70', gullies: 0, haze: 0.05, hazeColor: '#dfe8f4',
+    rockTop: '#93a4ba', rockMid: '#64788f', rockLow: '#4c5f76',
+    snowHi: '#f7fbff', snowMid: '#dfeafa', snowLow: '#b7cce3',
+    snowDepth: 0.082, snowVar: 0.04,
+    gullyRGB: '54,70,90', gullies: 0, haze: 0.0, hazeColor: '#dfe8f4',
+    baseFade: 0.82,
   });
 
   const tex = new THREE.CanvasTexture(cv);
@@ -1379,15 +1377,125 @@ function buildSnowRange() {
     fog: false,
     side: THREE.DoubleSide,
   });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3200, 600), mat);
-  mesh.position.set(0, 120, 1050);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3200, 560), mat);
+  mesh.position.set(0, 150, 1050);
   mesh.frustumCulled = false;
   mesh.renderOrder = -1;
   scene.add(mesh);
   return { mesh, mat };
 }
 
+/* 花海尽头的地标：一棵孤树 */
+function buildLoneTree() {
+  const g = new THREE.Group();
+  const x = 6.5;
+  const z = 186;
+  const y = heightAt(x, z);
+
+  const trunkMat = new THREE.MeshLambertMaterial({ color: 0x5b452e });
+  const leafMats = [0x3d5a2f, 0x486736, 0x34502a, 0x516f3b].map(
+    (c) => new THREE.MeshLambertMaterial({ color: c })
+  );
+  const blobGeo = new THREE.SphereGeometry(1, 12, 9);
+
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.62, 5.4, 9), trunkMat);
+  trunk.position.y = 2.7;
+  trunk.castShadow = true;
+  trunk.receiveShadow = true;
+  g.add(trunk);
+
+  for (const [ax, ay, az, rot] of [[0.9, 4.4, 0.3, -0.7], [-0.85, 4.9, -0.2, 0.75], [0.2, 5.6, -0.8, 0.2]]) {
+    const br = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, 2.2, 6), trunkMat);
+    br.position.set(ax * 0.5, ay, az * 0.5);
+    br.rotation.z = rot;
+    br.rotation.x = az * 0.6;
+    br.castShadow = true;
+    g.add(br);
+  }
+
+  // 树冠用十几个小球拼，轮廓才不圆
+  const crown = [
+    [0, 6.6, 0, 1.9], [-1.5, 6.1, 0.7, 1.5], [1.6, 6.2, -0.5, 1.55],
+    [0.4, 7.5, 0.4, 1.35], [-0.9, 7.1, -0.8, 1.2], [1.1, 5.5, 1.0, 1.15],
+    [-1.4, 5.4, -0.9, 1.05], [0.9, 6.9, -1.3, 1.1], [-0.5, 5.9, 1.4, 1.0],
+    [2.0, 6.8, 0.4, 0.95], [-2.0, 6.7, -0.2, 0.9], [0.2, 5.2, -1.2, 0.95],
+  ];
+  for (let i = 0; i < crown.length; i++) {
+    const [bx, by, bz, r] = crown[i];
+    const m = new THREE.Mesh(blobGeo, leafMats[i % leafMats.length]);
+    m.position.set(bx, by, bz);
+    m.scale.set(r, r * 0.82, r);
+    m.rotation.set(i * 0.7, i * 1.3, 0);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    g.add(m);
+  }
+
+  // 远处的树不在阴影相机范围里，地上补一块软阴影
+  const shadeMat = new THREE.MeshBasicMaterial({
+    color: 0x1d2416,
+    transparent: true,
+    opacity: 0.26,
+    depthWrite: false,
+  });
+  const shade = new THREE.Mesh(new THREE.CircleGeometry(3.4, 20), shadeMat);
+  shade.rotation.x = -Math.PI / 2;
+  shade.position.set(0.2, 0.03, 0.1);
+  shade.renderOrder = 1;
+  g.add(shade);
+
+  // 树下几块石头，给个落脚点
+  const stoneMat = new THREE.MeshLambertMaterial({ color: 0x8d8b80 });
+  for (const [sx, sz, sr] of [[1.8, 1.2, 0.55], [-2.1, -0.8, 0.42], [2.6, -1.4, 0.34]]) {
+    const st = new THREE.Mesh(blobGeo, stoneMat);
+    st.position.set(sx, sr * 0.45, sz);
+    st.scale.set(sr, sr * 0.6, sr * 0.85);
+    st.castShadow = true;
+    st.receiveShadow = true;
+    g.add(st);
+  }
+
+  g.position.set(x, y, z);
+  scene.add(g);
+  return g;
+}
+
+const loneTree = buildLoneTree();
+
 const snowRange = buildSnowRange();
+
+/* 日照金山：山顶一层暖色罩，黄昏时才透出来 */
+function makeWarmCapTexture() {
+  const S = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = 8;
+  canvas.height = S;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, 0, S);
+  g.addColorStop(0, 'rgba(255,255,255,0.95)');
+  g.addColorStop(0.55, 'rgba(255,255,255,0.35)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 8, S);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const warmCapMat = new THREE.MeshBasicMaterial({
+  map: makeWarmCapTexture(),
+  transparent: true,
+  depthWrite: false,
+  fog: false,
+  color: 0xffb27a,
+  opacity: 0,
+  side: THREE.DoubleSide,
+});
+const warmCap = new THREE.Mesh(new THREE.PlaneGeometry(3200, 260), warmCapMat);
+warmCap.position.set(0, 330, 1046);
+warmCap.frustumCulled = false;
+warmCap.renderOrder = -1;
+scene.add(warmCap);
 
 /* 山脚的雾带：一条竖直渐隐的雾幕，把雪山和地面接起来 */
 function makeHazeVeilTexture() {
@@ -1493,6 +1601,8 @@ function makePathRibbon(pointsXZ, halfWidth) {
 
 makePathRibbon(PATH_POINTS, 0.72);
 makePathRibbon(INNER_PATH_POINTS, 0.68);
+// 去花海的路面：走的人多了压出来的一道窄车辙
+makePathRibbon(FLOWER_ROAD, 0.46);
 
 /* =========================================================
    6. 风与草
@@ -1526,6 +1636,8 @@ const WIND_GLSL = /* glsl */ `
 
   vec3 windOffset(vec3 world, float h, float stiff, float phase) {
     float t = uTime;
+    // 整片花海被风压过去的一道低频浪，uGust 大的时候最明显
+    float fieldWave = sin(world.x * 0.042 + world.z * 0.028 + t * 0.85) * uGust;
     float gust = sin(world.x * 0.098 + t * 0.52) * 0.5 + sin(world.z * 0.121 - t * 0.35) * 0.5;
     // 风阵：一道波顺着风向滚过草原，uGust 由 JS 每隔十秒左右放一次
     float front = sin(world.x * 0.052 + world.z * 0.031 - t * 1.15);
@@ -1534,9 +1646,9 @@ const WIND_GLSL = /* glsl */ `
                + sin(t * 2.65 + phase * 1.7) * 0.22;
     float bend = pow(clamp(h, 0.0, 1.0), 1.5) * stiff;
     return vec3(
-      (0.78 * sway + 0.62 * gust + 0.35 * wave) * 0.2 * bend * uWind,
+      (0.78 * sway + 0.62 * gust + 0.35 * wave + fieldWave * 0.85) * 0.2 * bend * uWind,
       0.0,
-      (0.54 * sway - 0.46 * gust + 0.22 * wave * 0.6) * 0.2 * bend * uWind
+      (0.54 * sway - 0.46 * gust + 0.22 * wave * 0.6 + fieldWave * 0.4) * 0.2 * bend * uWind
     );
   }
 `;
@@ -1731,7 +1843,7 @@ const flowerFragment = /* glsl */ `
     float ndl = 0.62 + 0.38 * abs(dot(n, uSunDir));
     float cs = cloudShade(vWorld.xz);
     vec3 sun = uSunColor * ndl * 1.16 * uSunI * sh * cs;
-    vec3 amb = uSkyColor * 0.85 + vec3(0.008, 0.014, 0.024);
+    vec3 amb = (uSkyColor * 0.85 + vec3(0.008, 0.014, 0.024)) * mix(1.0, cs, 0.55);
     vec3 col = vColor * tex.rgb * (sun + amb);
 
     float back = pow(max(-dot(v, uSunDir), 0.0), 2.0);
@@ -2101,7 +2213,7 @@ function buildChunk(cx, cz, ring) {
     let kind;
     if (sea > 0.12) {
       // 花海：一大片一大片地同色，边缘才掺别的花
-      const zone = fbm(x * 0.013 + 71.7, z * 0.013 - 23.4, 3);
+      const zone = seaZone(x, z);
       if (zone < 0.40) kind = 2;        // 粉色波斯菊
       else if (zone < 0.52) kind = 3;   // 白色碎花
       else if (zone < 0.62) kind = 5;   // 红罂粟
@@ -2130,10 +2242,17 @@ function buildChunk(cx, cz, ring) {
       sea = seaAt(x, z);
     }
 
-    const tall = rand() < (sea > 0.3 ? 0.04 : 0.12);
-    const stemH = (tall ? 0.52 + rand() * 0.22 : 0.26 + rand() * 0.15) * (1 + sea * 0.50);
-    const headSize = Math.min(0.2, ((kind === 3 || kind === 4 || kind === 5 ? 0.15 : tall ? 0.145 : 0.11) + rand() * 0.035)
-      * (1 + sea * 0.22));
+    // 高矮分层：花海里绝大多数是矮花，插一小撮高花，才有前景/中景的纵深
+    let stemH;
+    if (sea > 0.25) {
+      stemH = rand() < 0.16 ? 0.78 + rand() * 0.36 : 0.26 + rand() * 0.13;
+    } else {
+      const tall = rand() < 0.12;
+      stemH = tall ? 0.52 + rand() * 0.22 : 0.26 + rand() * 0.15;
+    }
+    stemH *= 1 + sea * 0.22;
+    const headSize = Math.min(0.2, ((kind === 3 || kind === 4 || kind === 5 ? 0.15 : stemH > 0.6 ? 0.145 : 0.11) + rand() * 0.035)
+      * (1 + sea * 0.2));
     const phase = rand() * TAU;
 
     dummy.position.set(x, y, z);
@@ -2209,7 +2328,7 @@ function buildChunk(cx, cz, ring) {
       dummy.scale.setScalar((0.13 + rand() * 0.10) * (show ? 1 : 0.0001));
       dummy.updateMatrix();
       lowMesh.setMatrixAt(i, dummy.matrix);
-      const zone = fbm(x * 0.013 + 71.7, z * 0.013 - 23.4, 3);
+      const zone = seaZone(x, z);
       const zp = zone < 0.40 ? 0 : zone < 0.55 ? 1 : zone < 0.63 ? 2 : zone < 0.72 ? 3 : zone < 0.86 ? 4 : 5;
       const pal = lowTints[rand() < 0.82 ? zp : Math.floor(rand() * 6)];
       lowMesh.setColorAt(i, tmpColor.setHex(pal[Math.floor(rand() * pal.length)]));
@@ -2283,6 +2402,31 @@ function buildChunk(cx, cz, ring) {
     petalMesh.computeBoundingSphere();
     petalMesh.frustumCulled = false;
     group.add(petalMesh);
+  }
+
+  /* 碎石：花海里零星的小石头，脚边才有的一层 */
+  if (seaK > 0.12) {
+    const stoneCount = Math.round(seaK * 420);
+    const stoneGeo = new THREE.SphereGeometry(1, 6, 4);
+    const stoneMat = new THREE.MeshLambertMaterial({ color: 0x9b978c });
+    const stoneMesh = new THREE.InstancedMesh(stoneGeo, stoneMat, stoneCount);
+    const stoneTints = [0x9b978c, 0x8b877c, 0xa9a396, 0x77736a];
+    for (let i = 0; i < stoneCount; i++) {
+      const x = baseX + rand() * CHUNK;
+      const z = baseZ + rand() * CHUNK;
+      const y = heightAt(x, z);
+      const show = seaAt(x, z) > 0.3;
+      const r = 0.05 + rand() * 0.12;
+      dummy.position.set(x, show ? y + r * 0.35 : -999, z);
+      dummy.rotation.set(rand() * TAU, rand() * TAU, rand() * TAU);
+      dummy.scale.set(r, show ? r * 0.55 : 0.0001, r * (0.8 + rand() * 0.5));
+      dummy.updateMatrix();
+      stoneMesh.setMatrixAt(i, dummy.matrix);
+      stoneMesh.setColorAt(i, tmpColor.setHex(stoneTints[Math.floor(rand() * stoneTints.length)]));
+    }
+    stoneMesh.computeBoundingSphere();
+    stoneMesh.frustumCulled = false;
+    group.add(stoneMesh);
   }
 
   /* 落叶：铺在花根之间的褐叶，和花瓣混着来 */
@@ -4209,6 +4353,7 @@ let masterGain = null;
 let muted = false;
 let music = null;
 let windGain = null;
+let insectGain = null;
 let stepBuffer = null;
 let cartRollGain = null;
 let cartCreakTimer = 0;
@@ -4255,6 +4400,19 @@ function initAudio() {
   windGain.gain.value = 0.15;
   wind.connect(lowpass).connect(windGain).connect(masterGain);
   wind.start();
+
+  // 花海里的虫鸣：一层低频嗡声，进花海才响
+  const hum = audioCtx.createOscillator();
+  hum.type = 'sawtooth';
+  hum.frequency.value = 182;
+  const humBand = audioCtx.createBiquadFilter();
+  humBand.type = 'bandpass';
+  humBand.frequency.value = 430;
+  humBand.Q.value = 4.5;
+  insectGain = audioCtx.createGain();
+  insectGain.gain.value = 0;
+  hum.connect(humBand).connect(insectGain).connect(masterGain);
+  hum.start();
 
   const lfo = audioCtx.createOscillator();
   lfo.frequency.value = 0.052;
@@ -4791,6 +4949,8 @@ function applyTime() {
 
   hazeVeilMat.color.copy(s.fog);
 
+  warmCapMat.opacity = clamp(s.dusk * 0.55, 0, 0.55);
+
   // 雪山：白天是雪白偏冷，黄昏吃一点暖，夜里沉成深蓝
   const sn = 1 - s.night * 0.84;
   snowRange.mat.color.setRGB(
@@ -4971,6 +5131,16 @@ function updateWorld(t, dt) {
     }
   }
   dandelionGeo.attributes.position.needsUpdate = true;
+
+  // 虫鸣跟着脚下的花海密度走，夜里收掉
+  if (insectGain && audioCtx) {
+    const seaHere = seaAt(player.x, player.z);
+    insectGain.gain.setTargetAtTime(
+      seaHere * 0.014 * (1 - timeState.night * 0.9),
+      audioCtx.currentTime,
+      0.7
+    );
+  }
 
   updateFireflies(t, dt);
 
