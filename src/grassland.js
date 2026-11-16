@@ -184,8 +184,8 @@ const skyFrag = /* glsl */ `
     vec3 dir = normalize(vDir);
     float up = clamp(dir.y, 0.0, 1.0);
 
-    vec3 col = mix(uHorizon, uZenith, pow(smoothstep(0.0, 0.44, up), 0.58));
-    col = mix(col, uHaze, exp(-max(dir.y, 0.0) * 10.0) * 0.22);
+    vec3 col = mix(uHorizon, uZenith, pow(clamp(up, 0.0, 1.0), 0.60));
+    col = mix(col, uHaze, exp(-max(dir.y, 0.0) * 6.5) * 0.26);
 
     // 积云：底暗顶亮。黄昏时暗面转紫、亮面吃暖光
     if (dir.y > 0.006) {
@@ -219,7 +219,7 @@ const skyFrag = /* glsl */ `
       vec3 flatDir = normalize(vec3(dir.x, 0.0001, dir.z));
       vec3 flatSun = normalize(vec3(uSunDir.x, 0.0001, uSunDir.z));
       float toward = max(dot(flatDir, flatSun), 0.0);
-      float lowBand = exp(-max(dir.y, 0.0) * 5.2);
+      float lowBand = exp(-max(dir.y, 0.0) * 3.4);
       float warm = pow(toward, 3.4) * lowBand * uDusk;
       col = mix(col, uSunColor * 1.15, warm * 0.46);
       float away = pow(max(-dot(flatDir, flatSun), 0.0), 1.5) * lowBand * uDusk;
@@ -1225,162 +1225,363 @@ let terrainMesh = null;
 /* =========================================================
    4.6 远处的雪山
    ========================================================= */
-/* 远处的雪山：画出来的一张山脊图，贴在一块朝向镜头的板子上。
-   远处的山本来就看不出体积，画出来的轮廓反而最像。 */
-function makeSnowRangeTexture() {
-  const W = 2048;
-  const H = 512;
-  const cv = document.createElement('canvas');
-  cv.width = W;
-  cv.height = H;
-  const ctx = cv.getContext('2d');
-  const rnd = mulberry32(20261116);
+/* 真正的三维山体：一张高度场，用脊状分形堆出主峰、沟壑和碎岩，
+   按每个面的法线打光，雪按「高度 + 坡度」长在山上。
+   向阳面亮、背阴面暗、山谷发青、山脊挂雪 —— 这些都不是画上去的。 */
+const MTN = {
+  x: 0,
+  z0: 815,      // 靠近玩家的这一边：刚好落在地形边缘（z=800）之后
+  w: 3600,
+  d: 1020,
+  segX: 400,
+  segZ: 140,
+  baseY: -90,    // 山脚埋到地平线以下，接缝被前面的丘陵盖住
+  peak: 520,     // 主峰基准高度（米）
+};
 
-  // 分形山脊：多个倍频的"尖顶噪声"，出来的峰高低不齐、疏密不均
-  const ridgeNoise = (x, seed) => {
-    let v = 0;
-    let amp = 1;
-    let freq = 1;
-    let norm = 0;
-    for (let o = 0; o < 5; o++) {
-      const n = valueNoise(x * freq + seed * 13.7, seed * 7.3 + o * 3.1);
-      const r = 1 - Math.abs(n * 2 - 1);
-      v += r * r * amp;
-      norm += amp;
-      amp *= 0.52;
-      freq *= 2.13;
-    }
-    return v / norm;
-  };
+/* 一维格点噪声：山脊线沿东西方向的高度靠它 */
+const mtnLattice = (() => {
+  const r = mulberry32(913377);
+  const a = new Float32Array(1024);
+  for (let i = 0; i < 1024; i++) a[i] = r();
+  return a;
+})();
 
-  // 山脊：三层倍频的尖顶噪声，再取幂拉开高低差 —— 出来的峰大小不一、间距不均
-  const makeRidge = (seed, amp, lift, peaks) => (t) => {
-    const big = Math.pow(ridgeNoise(t * 2.9, seed), 1.75);
-    const mid = Math.pow(ridgeNoise(t * 6.2, seed + 3.3), 2.1) * 0.34;
-    let v = big * 1.18 + mid;
-    // 主峰稍微提一下，避免整条线太平
-    for (const p of peaks) {
-      const d = t < p.c ? (p.c - t) / p.wl : (t - p.c) / p.wr;
-      if (d < 1) v += p.h * 0.26 * Math.pow(1 - d, 1.6);
-    }
-    return H * (1 - (lift + amp * Math.min(1.15, v)));
-  };
-
-  const drawRange = (cfg) => {
-    const ridgeAt = makeRidge(cfg.seed, cfg.amp, cfg.lift, cfg.peaks);
-    const depthAt = (t) =>
-      H * (cfg.snowDepth + cfg.snowVar * ridgeNoise(t * 6.3, cfg.seed + 4.7));
-
-    // 1. 山体：一整块冷灰色的岩体，上亮下暗
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(0, H);
-    for (let x = 0; x <= W; x += 2) ctx.lineTo(x, ridgeAt(x / W));
-    ctx.lineTo(W, H);
-    ctx.closePath();
-    const g = ctx.createLinearGradient(0, H * (1 - cfg.lift - cfg.amp), 0, H);
-    g.addColorStop(0, cfg.rockTop);
-    g.addColorStop(0.55, cfg.rockMid);
-    g.addColorStop(1, cfg.rockLow);
-    ctx.fillStyle = g;
-    ctx.fill();
-    ctx.clip();
-
-    // 2. 雪帽：沿山脊铺一段，边缘柔和（模糊一下，别像切的纸）
-    ctx.filter = 'blur(3px)';
-    ctx.beginPath();
-    for (let x = 0; x <= W; x += 2) {
-      const t = x / W;
-      ctx.lineTo(x, ridgeAt(t) - 2);
-    }
-    for (let x = W; x >= 0; x -= 2) {
-      const t = x / W;
-      ctx.lineTo(x, ridgeAt(t) + depthAt(t));
-    }
-    ctx.closePath();
-    const sg = ctx.createLinearGradient(0, H * (1 - cfg.lift - cfg.amp), 0, H);
-    sg.addColorStop(0, cfg.snowHi);
-    sg.addColorStop(0.5, cfg.snowMid);
-    sg.addColorStop(1, cfg.snowLow);
-    ctx.fillStyle = sg;
-    ctx.fill();
-    ctx.filter = 'none';
-
-    // 3. 岩壁：几道深色的沟，从山脊往下拉
-    ctx.filter = 'blur(2px)';
-    for (let i = 0; i < cfg.gullies; i++) {
-      const x = rnd() * W;
-      const top = ridgeAt(x / W);
-      const len = H * (0.14 + rnd() * 0.3);
-      ctx.strokeStyle = `rgba(${cfg.gullyRGB},${0.10 + rnd() * 0.14})`;
-      ctx.lineWidth = 6 + rnd() * 22;
-      ctx.beginPath();
-      ctx.moveTo(x, top + 6);
-      ctx.bezierCurveTo(
-        x + (rnd() - 0.5) * 26, top + len * 0.45,
-        x + (rnd() - 0.5) * 34, top + len * 0.75,
-        x + (rnd() - 0.5) * 44, top + len
-      );
-      ctx.stroke();
-    }
-    ctx.filter = 'none';
-
-    // 4. 山脚整个化进天边的雾色里，不留一条硬底边
-    if (cfg.baseFade) {
-      const bg = ctx.createLinearGradient(0, H * 0.24, 0, H);
-      bg.addColorStop(0, 'rgba(222,232,244,0)');
-      bg.addColorStop(0.5, `rgba(222,232,244,${(cfg.baseFade * 0.55).toFixed(3)})`);
-      bg.addColorStop(1, `rgba(222,232,244,${cfg.baseFade})`);
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, 0, W, H);
-    }
-
-    // 5. 空气透视
-    if (cfg.haze > 0) {
-      ctx.globalAlpha = cfg.haze;
-      ctx.fillStyle = cfg.hazeColor;
-      ctx.fillRect(0, 0, W, H);
-      ctx.globalAlpha = 1;
-    }
-    ctx.restore();
-  };
-
-  // 一整条山脉：只有一层，靠山脚渐隐做出空气透视，避免叠成三层纸片
-  drawRange({
-    seed: 3.7, amp: 0.40, lift: 0.26,
-    peaks: [
-      { c: 0.10, h: 0.72, wl: 0.12, wr: 0.10 },
-      { c: 0.30, h: 0.95, wl: 0.13, wr: 0.16 },
-      { c: 0.46, h: 0.62, wl: 0.08, wr: 0.09 },
-      { c: 0.63, h: 0.88, wl: 0.15, wr: 0.11 },
-      { c: 0.82, h: 0.70, wl: 0.10, wr: 0.14 },
-    ],
-    rockTop: '#93a4ba', rockMid: '#64788f', rockLow: '#4c5f76',
-    snowHi: '#f7fbff', snowMid: '#dfeafa', snowLow: '#b7cce3',
-    snowDepth: 0.082, snowVar: 0.04,
-    gullyRGB: '54,70,90', gullies: 0, haze: 0.0, hazeColor: '#dfe8f4',
-    baseFade: 0.82,
-  });
-
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.minFilter = THREE.LinearFilter;
-  tex.generateMipmaps = false;
-  return tex;
+function mtnLatticeAt(u) {
+  const i = Math.floor(u);
+  const f = u - i;
+  const s = f * f * (3 - 2 * f);
+  const a = mtnLattice[((i % 1024) + 1024) % 1024];
+  const b = mtnLattice[(((i + 1) % 1024) + 1024) % 1024];
+  return a + (b - a) * s;
 }
 
+/* 尖顶分形：取 |2n-1| 的补，得到有尖有谷的脊线 */
+function mtnRidge1(u) {
+  let v = 0;
+  let amp = 1;
+  let f = 1;
+  let norm = 0;
+  for (let o = 0; o < 4; o++) {
+    const n = mtnLatticeAt(u * f + o * 53.7);
+    const r = 1 - Math.abs(n * 2 - 1);
+    v += r * r * amp;
+    norm += amp;
+    amp *= 0.52;
+    f *= 2.13;
+  }
+  return v / norm;
+}
+
+/* 山脊高度（0~1）：大块山基上长峰群，峰上再长尖角。
+   小尺度的峰只挂在大山体的坡上，山才不是一排等距的锯齿。 */
+function mtnCrest(u) {
+  // 脊状噪声的实际取值挤在 0.25 上下，先拉伸到满量程，山才有真正的高差
+  const stretch = (v) => clamp((v - 0.10) / 0.40, 0, 1);
+  const massif = Math.pow(stretch(mtnRidge1(u * 1.55 + 3.10)), 1.25);
+  const peaks = Math.pow(stretch(mtnRidge1(u * 5.30 + 9.70)), 1.70);
+  const crags = Math.pow(stretch(mtnRidge1(u * 14.0 + 23.30)), 2.10);
+  const body =
+    massif * 0.60 + peaks * 0.32 * (0.40 + massif) + crags * 0.11 * (0.28 + peaks);
+  // 一座主峰压住整条山脉，两侧的峰比它矮一截
+  const hero = 0.10 + 0.90 * Math.exp(-Math.pow((u - 0.615) / 0.145, 2.0))
+    + 0.34 * Math.exp(-Math.pow((u - 0.845) / 0.10, 2.0));
+  return clamp(body * hero * 1.34, 0, 1.12);
+}
+
+/* 雪山自己的 uniform：applyTime 里从时辰状态同步过来 */
+/* 山的骨架是一组山脊线：每条从峰顶往一个方向伸出去，两头带高度。
+   山脊与山脊之间自然会落成山谷 —— 这是锥形山峰做不到的。 */
+const MTN_RIDGES = [
+  // [x1, z1, h1, x2, z2, h2, 半宽]
+  [280, 1215, 690, 760, 1250, 300, 430],     // 主峰向东
+  [280, 1215, 690, -200, 1265, 360, 430],    // 主峰向西
+  [280, 1215, 690, 520, 1010, 300, 330],     // 主峰向南（朝观众的一侧）
+  [280, 1215, 690, 60, 1330, 400, 400],      // 主峰向北
+  [-520, 1255, 470, -250, 1300, 340, 330],   // 西侧第二座
+  [-520, 1255, 470, -980, 1260, 280, 360],
+  [-1310, 1245, 320, -1720, 1250, 190, 330],
+  [1150, 1255, 400, 1520, 1245, 230, 350],
+  [1150, 1255, 400, 780, 1300, 260, 300],
+  [-150, 1050, 250, 380, 1030, 205, 330],    // 前面那道矮山肩
+];
+
+const mtnUniforms = {
+  uSunDir: { value: SUN_DIR.clone() },
+  uSunColor: { value: new THREE.Color(0xffeec6) },
+  uSunI: { value: 1.0 },
+  uSkyColor: { value: new THREE.Color(0xb7d2e8) },
+  uFogColor: { value: new THREE.Color(0xc8d6e2) },
+  uNight: { value: 0 },
+  uDusk: { value: 0 },
+};
+
 function buildSnowRange() {
-  const mat = new THREE.MeshBasicMaterial({
-    map: makeSnowRangeTexture(),
-    transparent: true,
-    depthWrite: false,
-    fog: false,
-    side: THREE.DoubleSide,
+  const { w, d, segX, segZ, z0, baseY } = MTN;
+  const geo = new THREE.PlaneGeometry(w, d, segX, segZ);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(MTN.x, baseY, z0 + d / 2);
+
+  const pos = geo.attributes.position;
+  const count = pos.count;
+  const rowLen = segX + 1;
+  const left = MTN.x - w / 2;
+  const heights = new Float32Array(count);
+
+  // 山体：几个峰按距离衰减叠加成一块高山，再用脊状分形刻出山脊网
+  function mtnRidgeField(x, z) {
+    let v = 0;
+    let amp = 1;
+    let f = 0.0024;
+    let norm = 0;
+    for (let o = 0; o < 5; o++) {
+      const n = 1 - Math.abs(valueNoise(x * f + o * 17.3, z * f - o * 9.1) * 2 - 1);
+      v += n * n * amp;
+      norm += amp;
+      amp *= 0.52;
+      f *= 2.07;
+    }
+    return v / norm;
+  }
+
+  const ridgeVals = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const tz = (z - z0) / d;
+
+    // 山脊线取最大的那条：两条脊相交处自然形成棱线
+    let ridgeH = 0;
+    for (let k = 0; k < MTN_RIDGES.length; k++) {
+      const r = MTN_RIDGES[k];
+      const abx = r[3] - r[0];
+      const abz = r[4] - r[1];
+      const len2 = abx * abx + abz * abz || 1;
+      let t = ((x - r[0]) * abx + (z - r[1]) * abz) / len2;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = r[0] + abx * t;
+      const pz = r[1] + abz * t;
+      const d = Math.hypot(x - px, z - pz) / r[6];
+      const prof = Math.pow(Math.max(0, 1 - d), 1.75);
+      const v = (r[2] + (r[5] - r[2]) * t) * prof;
+      if (v > ridgeH) ridgeH = v;
+    }
+
+    // 山脚垫一层厚底座，山脊之间不至于漏出天空
+    let base = 0;
+    for (let k = 0; k < MTN_RIDGES.length; k += 2) {
+      const r = MTN_RIDGES[k];
+      const dd = Math.hypot((x - r[0]) / (r[6] * 2.1), (z - r[1]) / (r[6] * 2.1));
+      if (dd < 1) base += r[2] * 0.30 * Math.pow(1 - dd, 1.8);
+    }
+
+    let massif = Math.max(ridgeH, base);
+
+    // 脊状分形：脊线连成网，山脊与沟壑自然分叉
+    const rid = clamp((mtnRidgeField(x, z) - 0.07) / 0.42, 0, 1);
+    ridgeVals[i] = rid;
+
+    const scale = massif / 640;
+    let h = massif * (0.80 + 0.36 * rid);
+    h += (fbm(x * 0.0095 + 2.7, z * 0.0095 - 5.3, 4) - 0.5) * 62 * scale;
+    h += (fbm(x * 0.0280 - 11.2, z * 0.0280 + 6.6, 3) - 0.5) * 22 * scale;
+
+    // 前后两端沉到地平线以下，接缝被前面的丘陵挡住
+    h *= Math.min(1, tz / 0.07) * Math.min(1, (1 - tz) / 0.09);
+    if (h < 0) h *= 0.3;
+
+    heights[i] = h;
+    pos.setY(i, baseY + h);
+  }
+  geo.computeVertexNormals();
+
+  // 沟谷 AO：比四周高的山脊提亮，凹下去的雪沟压暗 —— 这是立体感的一半
+  const nrm = geo.attributes.normal;
+  const snowAttr = new Float32Array(count);
+  const rockAttr = new Float32Array(count);
+  const aoAttr = new Float32Array(count);
+  const RINGS = [2, 5, 10, 18];
+
+  for (let i = 0; i < count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const ny = nrm.getY(i);
+
+    const line = 118 + (fbm(x * 0.0028 - 3.1, z * 0.0028 + 7.4, 3) - 0.5) * 88;
+    let sn = smoothstep(line - 128, line + 120, y);
+    sn *= smoothstep(0.10, 0.40, ny);                       // 陡的岩壁挂不住雪
+    // 沟里存不住雪：山脊之间的深槽露出深色岩体。
+    // 只在雪线附近这么干，峰顶的雪面才干净，不会长出一片脏斑。
+    const rockRib = smoothstep(0.04, 0.34, ridgeVals[i]);
+    const lowK = smoothstep(line + 160, line - 50, y);
+    sn *= 1.0 - (1.0 - rockRib) * lowK;
+    sn *= 0.90 + fbm(x * 0.019 + 5.5, z * 0.019 - 9.1, 3) * 0.22;
+    snowAttr[i] = clamp(sn, 0, 1);
+
+    rockAttr[i] = clamp(fbm(x * 0.0065 + 13.0, z * 0.0065 - 4.0, 3) * 1.45 - 0.16, 0, 1);
+
+    // 邻域平均：取几圈不同半径，山脊比四周高就亮、沟里就暗
+    const ix = i % rowLen;
+    const iy = (i - ix) / rowLen;
+    let sum = 0;
+    let wsum = 0;
+    for (let r = 0; r < RINGS.length; r++) {
+      const rad = RINGS[r];
+      let local = 0;
+      let lw = 0;
+      for (let k = 0; k < 8; k++) {
+        const jx = ix + (k === 0 ? rad : k === 1 ? -rad : k === 4 ? rad : k === 5 ? -rad : k === 6 ? rad : k === 7 ? -rad : 0);
+        const jy = iy + (k === 2 ? rad : k === 3 ? -rad : k === 4 ? rad : k === 5 ? -rad : k === 6 ? -rad : k === 7 ? rad : 0);
+        if (jx < 0 || jx > segX || jy < 0 || jy > segZ) continue;
+        local += heights[jy * rowLen + jx];
+        lw += 1;
+      }
+      if (lw > 0) {
+        sum += (local / lw) * rad;
+        wsum += rad;
+      }
+    }
+    const avg = wsum > 0 ? sum / wsum : heights[i];
+    aoAttr[i] = clamp(1 + (heights[i] - avg) / 110, 0.42, 1.12);
+  }
+
+  geo.setAttribute('aSnow', new THREE.BufferAttribute(snowAttr, 1));
+  geo.setAttribute('aRock', new THREE.BufferAttribute(rockAttr, 1));
+  geo.setAttribute('aAO', new THREE.BufferAttribute(aoAttr, 1));
+
+  const mat = new THREE.ShaderMaterial({
+    uniforms: mtnUniforms,
+    vertexShader: /* glsl */ `
+      attribute float aSnow;
+      attribute float aRock;
+      attribute float aAO;
+      varying vec3 vWorld;
+      varying vec3 vNrm;
+      varying float vSnow;
+      varying float vRock;
+      varying float vAO;
+
+      void main() {
+        vWorld = position;
+        vNrm = normalize(normal);
+        vSnow = aSnow;
+        vRock = aRock;
+        vAO = aAO;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uSunDir;
+      uniform vec3 uSunColor;
+      uniform float uSunI;
+      uniform vec3 uSkyColor;
+      uniform vec3 uFogColor;
+      uniform float uNight;
+      uniform float uDusk;
+
+      varying vec3 vWorld;
+      varying vec3 vNrm;
+      varying float vSnow;
+      varying float vRock;
+      varying float vAO;
+
+      float h21(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+      }
+      float vn(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(
+          mix(h21(i), h21(i + vec2(1.0, 0.0)), u.x),
+          mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), u.x),
+          u.y
+        );
+      }
+
+      void main() {
+        vec3 V = normalize(cameraPosition - vWorld);
+        float dist = length(cameraPosition - vWorld);
+
+        // 细节随距离收掉，远处不会抖成噪点
+        float detail = 1.0 - smoothstep(700.0, 1800.0, dist);
+        float g1 = vn(vWorld.xz * 0.052);
+        float g2 = vn(vWorld.xz * 0.155) * detail;
+
+        // 用噪声的梯度扰动法线：山面才有岩石的皴，不是一块光溜溜的模子
+        float e = 7.0;
+        float n0 = vn(vWorld.xz * 0.043);
+        float nx = vn((vWorld.xz + vec2(e, 0.0)) * 0.043);
+        float nz = vn((vWorld.xz + vec2(0.0, e)) * 0.043);
+        vec3 N = normalize(vNrm + vec3(n0 - nx, 0.0, n0 - nz) * 3.4 * detail);
+
+        // 环境光：朝上的面吃天光，朝下的面吃地面反照
+        float up = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+        vec3 amb = mix(uFogColor * 0.40, uSkyColor * 0.98, up);
+
+        // 直射：这是体积感的来源，向阳面亮、背阴面沉下去
+        float ndl = max(dot(N, uSunDir), 0.0);
+        vec3 direct = uSunColor * ndl * uSunI * 1.30;
+
+        // 岩石：冷灰，带噪声的深浅
+        vec3 rock = mix(vec3(0.150, 0.158, 0.168), vec3(0.385, 0.378, 0.360), vRock);
+        rock *= 0.68 + g1 * 0.52 + g2 * 0.20;
+        rock *= 0.78 + 0.34 * up;
+
+        // 雪：噪声打碎边界，陡坡露岩
+        float brk = vn(vWorld.xz * 0.030 + 17.0);
+        // 顺着坡面往下淌的雪沟：x 高频、z 低频
+        float streak = vn(vec2(vWorld.x * 0.085, vWorld.z * 0.014) + 3.0);
+        // 阈值收窄、抬高：雪面上只留细碎变化，不会破出一块块灰斑
+        float sn = smoothstep(
+          0.46, 0.64,
+          vSnow + (brk - 0.5) * 0.13 + (streak - 0.5) * 0.13
+        );
+        sn *= smoothstep(0.10, 0.40, N.y);
+        vec3 snowCol = vec3(0.76, 0.80, 0.89) * (0.86 + g2 * 0.18);
+
+        vec3 albedo = mix(rock, snowCol, sn);
+        // AO 同时压雪和岩，沟里的雪才不是一层糖霜
+        // AO 主要作用在岩石上；雪面平整，只吃一点点，否则会糊成脏斑
+        float aoK = mix(0.95, 0.30, sn);
+        vec3 col = albedo * (amb + direct) * mix(1.0, vAO, aoK);
+
+        // 日照金山：太阳压到地平线时，高处的雪还亮着，山下的谷已经沉进阴影
+        float high = smoothstep(150.0, 470.0, vWorld.y);
+        col += uSunColor * uDusk * high * mix(0.30, 0.85, sn) * 0.42;
+
+        // 逆光金边：太阳落到山背后时，雪脊上透出一线暖光
+        float back = pow(max(dot(-V, uSunDir), 0.0), 2.2);
+        col += uSunColor * back * sn * (0.10 + uDusk * 1.55) * (0.35 + 0.65 * (1.0 - ndl));
+        // 山脊自带的一点雪面亮边
+        col += vec3(0.95, 0.96, 1.0) * sn * pow(1.0 - max(N.y, 0.0), 3.0) * 0.10;
+
+        // 空气透视：越远、越低，越化进天边的雾色
+        float aerial = smoothstep(1200.0, 3000.0, dist) * 0.22;
+        // 山脚的雾：颜色与远景地面那层雾一模一样，并且从山脚往上缓缓化开 ——
+        // 这样山是"从雾里长出来"，而不是被一条亮带横着切开
+        float mistN = vn(vWorld.xz * 0.0075 + 9.0) * 0.62 + vn(vWorld.xz * 0.024 - 3.0) * 0.38;
+        float mistTop = 225.0 + mistN * 165.0;
+        float foot = smoothstep(mistTop, mistTop - 235.0, vWorld.y);
+        // 雪比岩石更"穿透"雾：雾天里最先看见的总是雪线
+        foot *= mix(1.0, 0.72, vSnow);
+        // 雾色往天边的霞色靠一点，免得在天空下面拍出一条白带
+        vec3 mistCol = uFogColor;
+        col = mix(col, mistCol, clamp(aerial + foot, 0.0, 0.90));
+
+        // 夜里沉成深蓝
+        col *= mix(1.0, 0.30, uNight);
+        col += uSkyColor * uNight * 0.028;
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
   });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3200, 560), mat);
-  mesh.position.set(0, 150, 1050);
+
+  const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
-  mesh.renderOrder = -1;
   scene.add(mesh);
   return { mesh, mat };
 }
@@ -1463,74 +1664,6 @@ function buildLoneTree() {
 const loneTree = buildLoneTree();
 
 const snowRange = buildSnowRange();
-
-/* 日照金山：山顶一层暖色罩，黄昏时才透出来 */
-function makeWarmCapTexture() {
-  const S = 64;
-  const canvas = document.createElement('canvas');
-  canvas.width = 8;
-  canvas.height = S;
-  const ctx = canvas.getContext('2d');
-  const g = ctx.createLinearGradient(0, 0, 0, S);
-  g.addColorStop(0, 'rgba(255,255,255,0.95)');
-  g.addColorStop(0.55, 'rgba(255,255,255,0.35)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 8, S);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-const warmCapMat = new THREE.MeshBasicMaterial({
-  map: makeWarmCapTexture(),
-  transparent: true,
-  depthWrite: false,
-  fog: false,
-  color: 0xffb27a,
-  opacity: 0,
-  side: THREE.DoubleSide,
-});
-const warmCap = new THREE.Mesh(new THREE.PlaneGeometry(3200, 260), warmCapMat);
-warmCap.position.set(0, 330, 1046);
-warmCap.frustumCulled = false;
-warmCap.renderOrder = -1;
-scene.add(warmCap);
-
-/* 山脚的雾带：一条竖直渐隐的雾幕，把雪山和地面接起来 */
-function makeHazeVeilTexture() {
-  const S = 64;
-  const canvas = document.createElement('canvas');
-  canvas.width = S;
-  canvas.height = S;
-  const ctx = canvas.getContext('2d');
-  const g = ctx.createLinearGradient(0, S, 0, 0);
-  g.addColorStop(0, 'rgba(255,255,255,0.96)');
-  g.addColorStop(0.32, 'rgba(255,255,255,0.7)');
-  g.addColorStop(0.66, 'rgba(255,255,255,0.24)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, S, S);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-const hazeVeilMat = new THREE.MeshBasicMaterial({
-  map: makeHazeVeilTexture(),
-  transparent: true,
-  depthWrite: false,
-  fog: false,
-  color: 0xd9e2ec,
-  opacity: 0.32,
-  side: THREE.DoubleSide,
-});
-const hazeVeil = new THREE.Mesh(new THREE.PlaneGeometry(2200, 320), hazeVeilMat);
-hazeVeil.position.set(0, 40, 840);
-hazeVeil.rotation.y = Math.PI;
-hazeVeil.frustumCulled = false;
-scene.add(hazeVeil);
-
 
 /* =========================================================
    5. 土路
@@ -4923,6 +5056,15 @@ function applyTime() {
   sharedUniforms.uFogColor.value.copy(s.fog);
   sharedUniforms.uFogDensity.value = s.fogD;
 
+  // 雪山跟着同一套光走
+  mtnUniforms.uSunDir.value.copy(SUN_DIR);
+  mtnUniforms.uSunColor.value.copy(s.sun);
+  mtnUniforms.uSunI.value = clamp(s.sunI / 3.0, 0.05, 1.2);
+  mtnUniforms.uSkyColor.value.copy(s.hemiSky);
+  mtnUniforms.uFogColor.value.copy(s.fog);
+  mtnUniforms.uNight.value = s.night;
+  mtnUniforms.uDusk.value = s.dusk;
+
   // 时刻驱动的三个"天气参数"：黄昏逆光、清晨露水、云影浓度
   const hh = s.hour;
   sharedUniforms.uNight.value = clamp(smoothstep(-1.0, -9.0, s.elev), 0, 1);
@@ -4947,17 +5089,7 @@ function applyTime() {
   pollenMat.opacity = (0.52 + duskK * 0.30) * (1 - s.night * 0.88);
   dandelionMat.opacity = (0.58 + duskK * 0.22) * (1 - s.night * 0.9);
 
-  hazeVeilMat.color.copy(s.fog);
-
-  warmCapMat.opacity = clamp(s.dusk * 0.55, 0, 0.55);
-
-  // 雪山：白天是雪白偏冷，黄昏吃一点暖，夜里沉成深蓝
-  const sn = 1 - s.night * 0.84;
-  snowRange.mat.color.setRGB(
-    sn * (1.0 + s.dusk * 0.10),
-    sn * (1.0 + s.dusk * 0.03),
-    sn * (1.0 - s.dusk * 0.06)
-  );
+  // 雪山的光与雾全在它自己的着色器里，这里不用再染
 
   if (postfx) {
     postfx.grade.uniforms.uHeat.value = clamp(
