@@ -79,7 +79,8 @@ const GradeShader = {
         float d2sun = length(toSun);
         vec2 rd = toSun / max(d2sun, 0.0001);
         // 每个像素错开采样起点，否则 16 等分会在画面上留下放射状条带
-        float jit = rand(uv * 733.0 + fract(uTime) * 91.0);
+        // 固定抖动：逐帧随机会在亮块（雪山/太阳）进画面时变成满屏闪烁
+        float jit = rand(uv * 733.0);
         float halo = 0.0;
         float wsum = 0.0;
         for (int i = 1; i <= 20; i++) {
@@ -93,7 +94,7 @@ const GradeShader = {
         }
         halo /= max(wsum, 0.0001);
         float glow = pow(clamp(1.0 - d2sun * 1.05, 0.0, 1.0), 2.4);
-        col += uSunColor * halo * glow * uSunVis * (0.14 + uDusk * 0.34);
+        col += uSunColor * halo * glow * uSunVis * (0.10 + uDusk * 0.26);
       }
 
       // 冷暗部、暖高光：写实胶片的一点脾气

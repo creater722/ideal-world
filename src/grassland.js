@@ -1073,7 +1073,7 @@ let terrainMesh = null;
     seaArr[i] = sea;
     if (sea > 0.002) {
       col.lerp(seaFloor, sea * 0.26);
-      const zone = fbm(x * 0.028 + 71.7, z * 0.028 - 23.4, 3);
+      const zone = fbm(x * 0.013 + 71.7, z * 0.013 - 23.4, 3);
       const tint =
         zone < 0.40 ? seaPink :
         zone < 0.55 ? seaWhite :
@@ -1176,76 +1176,141 @@ function makeSnowRangeTexture() {
   cv.width = W;
   cv.height = H;
   const ctx = cv.getContext('2d');
-  const rnd = mulberry32(778899);
+  const rnd = mulberry32(20261116);
 
-  // 一串高低不一的尖峰：三角形叠加，轮廓才有山的样子
-  const makeRidge = (seed, count, amp, lift) => {
-    const r = mulberry32(seed * 977);
-    const peaks = [];
-    for (let i = 0; i < count; i++) {
-      peaks.push({
-        c: (i + 0.5) / count + (r() - 0.5) * 0.07,
-        h: 0.5 + r() * 0.5,
-        w: 0.085 + r() * 0.07,
-      });
+  // 分形山脊：多个倍频的"尖顶噪声"，出来的峰高低不齐、疏密不均
+  const ridgeNoise = (x, seed) => {
+    let v = 0;
+    let amp = 1;
+    let freq = 1;
+    let norm = 0;
+    for (let o = 0; o < 5; o++) {
+      const n = valueNoise(x * freq + seed * 13.7, seed * 7.3 + o * 3.1);
+      const r = 1 - Math.abs(n * 2 - 1);
+      v += r * r * amp;
+      norm += amp;
+      amp *= 0.52;
+      freq *= 2.13;
     }
-    return (t) => {
-      let v = 0;
-      for (const p of peaks) {
-        const d = Math.abs(t - p.c) / p.w;
-        if (d < 1) v = Math.max(v, p.h * Math.pow(1 - d, 1.4));
-      }
-      v += Math.sin(t * 63 + seed) * 0.018 + Math.sin(t * 137 + seed * 3) * 0.008;
-      return H * (1 - (lift + amp * v));
-    };
+    return v / norm;
   };
 
-  const dropLayer = (seed, count, amp, lift, pale, rock, snowDensity) => {
-    const ridgeAt = makeRidge(seed, count, amp, lift);
+  // 山脊：三层倍频的尖顶噪声，再取幂拉开高低差 —— 出来的峰大小不一、间距不均
+  const makeRidge = (seed, amp, lift, peaks) => (t) => {
+    const big = Math.pow(ridgeNoise(t * 2.9, seed), 1.75);
+    const mid = Math.pow(ridgeNoise(t * 6.2, seed + 3.3), 2.1) * 0.34;
+    let v = big * 1.18 + mid;
+    // 主峰稍微提一下，避免整条线太平
+    for (const p of peaks) {
+      const d = t < p.c ? (p.c - t) / p.wl : (t - p.c) / p.wr;
+      if (d < 1) v += p.h * 0.26 * Math.pow(1 - d, 1.6);
+    }
+    return H * (1 - (lift + amp * Math.min(1.15, v)));
+  };
+
+  const drawRange = (cfg) => {
+    const ridgeAt = makeRidge(cfg.seed, cfg.amp, cfg.lift, cfg.peaks);
+    const depthAt = (t) =>
+      H * (cfg.snowDepth + cfg.snowVar * ridgeNoise(t * 6.3, cfg.seed + 4.7));
+
+    // 1. 山体：一整块冷灰色的岩体，上亮下暗
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(0, H);
-    for (let x = 0; x <= W; x += 3) ctx.lineTo(x, ridgeAt(x / W));
+    for (let x = 0; x <= W; x += 2) ctx.lineTo(x, ridgeAt(x / W));
     ctx.lineTo(W, H);
     ctx.closePath();
-
-    const g = ctx.createLinearGradient(0, H * (1 - lift - amp), 0, H * 1.02);
-    g.addColorStop(0, pale);
-    g.addColorStop(0.14, pale);
-    g.addColorStop(0.30, rock);
-    g.addColorStop(0.62, '#4a5450');
-    g.addColorStop(1, '#333b38');
+    const g = ctx.createLinearGradient(0, H * (1 - cfg.lift - cfg.amp), 0, H);
+    g.addColorStop(0, cfg.rockTop);
+    g.addColorStop(0.55, cfg.rockMid);
+    g.addColorStop(1, cfg.rockLow);
     ctx.fillStyle = g;
     ctx.fill();
     ctx.clip();
 
-    for (let i = 0; i < snowDensity; i++) {
-      const x = rnd() * W;
-      const top = ridgeAt(x / W);
-      const y = top + rnd() * (H * 0.30);
-      const r = 12 + rnd() * 54;
-      ctx.fillStyle = `rgba(255,255,255,${0.06 + rnd() * 0.16})`;
-      ctx.beginPath();
-      ctx.ellipse(x, y, r, r * 0.42, 0, 0, TAU);
-      ctx.fill();
+    // 2. 雪帽：沿山脊铺一段，边缘柔和（模糊一下，别像切的纸）
+    ctx.filter = 'blur(3px)';
+    ctx.beginPath();
+    for (let x = 0; x <= W; x += 2) {
+      const t = x / W;
+      ctx.lineTo(x, ridgeAt(t) - 2);
     }
-    for (let i = 0; i < 150; i++) {
+    for (let x = W; x >= 0; x -= 2) {
+      const t = x / W;
+      ctx.lineTo(x, ridgeAt(t) + depthAt(t));
+    }
+    ctx.closePath();
+    const sg = ctx.createLinearGradient(0, H * (1 - cfg.lift - cfg.amp), 0, H);
+    sg.addColorStop(0, cfg.snowHi);
+    sg.addColorStop(0.5, cfg.snowMid);
+    sg.addColorStop(1, cfg.snowLow);
+    ctx.fillStyle = sg;
+    ctx.fill();
+    ctx.filter = 'none';
+
+    // 3. 岩壁：几道深色的沟，从山脊往下拉
+    ctx.filter = 'blur(2px)';
+    for (let i = 0; i < cfg.gullies; i++) {
       const x = rnd() * W;
       const top = ridgeAt(x / W);
-      const y = top + H * 0.24 + rnd() * (H * 0.3);
-      ctx.strokeStyle = `rgba(30,40,48,${0.03 + rnd() * 0.07})`;
-      ctx.lineWidth = 2 + rnd() * 9;
+      const len = H * (0.14 + rnd() * 0.3);
+      ctx.strokeStyle = `rgba(${cfg.gullyRGB},${0.10 + rnd() * 0.14})`;
+      ctx.lineWidth = 6 + rnd() * 22;
       ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + (rnd() - 0.5) * 24, y + 40 + rnd() * 90);
+      ctx.moveTo(x, top + 6);
+      ctx.bezierCurveTo(
+        x + (rnd() - 0.5) * 26, top + len * 0.45,
+        x + (rnd() - 0.5) * 34, top + len * 0.75,
+        x + (rnd() - 0.5) * 44, top + len
+      );
       ctx.stroke();
     }
+    ctx.filter = 'none';
+
+    // 4. 空气透视
+    ctx.globalAlpha = cfg.haze;
+    ctx.fillStyle = cfg.hazeColor;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
     ctx.restore();
   };
 
-  dropLayer(2.1, 8, 0.28, 0.46, '#e6eefa', '#9dabbd', 300);
-  dropLayer(5.7, 7, 0.24, 0.34, '#dfe9f8', '#7d8b9e', 260);
-  dropLayer(9.3, 6, 0.20, 0.22, '#d7e4f7', '#5f6c7c', 220);
+  // 远 → 近：远山淡、近山更深
+  drawRange({
+    seed: 1.7, amp: 0.34, lift: 0.42,
+    peaks: [
+      { c: 0.18, h: 0.92, wl: 0.20, wr: 0.15 },
+      { c: 0.55, h: 1.0, wl: 0.22, wr: 0.18 },
+      { c: 0.86, h: 0.7, wl: 0.14, wr: 0.1 },
+    ],
+    rockTop: '#94a5bb', rockMid: '#6f8199', rockLow: '#657791',
+    snowHi: '#f6fafe', snowMid: '#e2ecf9', snowLow: '#c3d4e8',
+    snowDepth: 0.105, snowVar: 0.045,
+    gullyRGB: '96,114,138', gullies: 0, haze: 0.2, hazeColor: '#dfe8f4',
+  });
+  drawRange({
+    seed: 6.1, amp: 0.34, lift: 0.30,
+    peaks: [
+      { c: 0.12, h: 0.66, wl: 0.16, wr: 0.14 },
+      { c: 0.42, h: 0.95, wl: 0.18, wr: 0.16 },
+      { c: 0.74, h: 0.82, wl: 0.16, wr: 0.13 },
+    ],
+    rockTop: '#6d8098', rockMid: '#4e6280', rockLow: '#445771',
+    snowHi: '#eef5fd', snowMid: '#d3e0f2', snowLow: '#aec2da',
+    snowDepth: 0.09, snowVar: 0.04,
+    gullyRGB: '54,70,90', gullies: 0, haze: 0.11, hazeColor: '#dfe8f4',
+  });
+  drawRange({
+    seed: 11.3, amp: 0.30, lift: 0.20,
+    peaks: [
+      { c: 0.24, h: 0.62, wl: 0.17, wr: 0.15 },
+      { c: 0.62, h: 0.78, wl: 0.2, wr: 0.14 },
+    ],
+    rockTop: '#5b6f88', rockMid: '#40536d', rockLow: '#354760',
+    snowHi: '#e8f1fb', snowMid: '#c9d8ec', snowLow: '#a2b8d2',
+    snowDepth: 0.075, snowVar: 0.035,
+    gullyRGB: '38,52,70', gullies: 0, haze: 0.05, hazeColor: '#dfe8f4',
+  });
 
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -1262,8 +1327,8 @@ function buildSnowRange() {
     fog: false,
     side: THREE.DoubleSide,
   });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2600, 640), mat);
-  mesh.position.set(0, 190, 980);
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3200, 600), mat);
+  mesh.position.set(0, 120, 1050);
   mesh.frustumCulled = false;
   mesh.renderOrder = -1;
   scene.add(mesh);
@@ -1297,11 +1362,11 @@ const hazeVeilMat = new THREE.MeshBasicMaterial({
   depthWrite: false,
   fog: false,
   color: 0xd9e2ec,
-  opacity: 0.95,
+  opacity: 0.32,
   side: THREE.DoubleSide,
 });
 const hazeVeil = new THREE.Mesh(new THREE.PlaneGeometry(2200, 320), hazeVeilMat);
-hazeVeil.position.set(0, 100, 840);
+hazeVeil.position.set(0, 40, 840);
 hazeVeil.rotation.y = Math.PI;
 hazeVeil.frustumCulled = false;
 scene.add(hazeVeil);
@@ -1806,7 +1871,7 @@ function buildChunk(cx, cz, ring) {
   );
 
   const tuftCount = ringCount(ring, [5000, 4300, 3200, 1800]);
-  const flowerCount = ringCount(ring, [1100, 980, 770, 450]) + Math.round(seaK * 3000);
+  const flowerCount = ringCount(ring, [1100, 980, 770, 450]) + Math.round(seaK * 1100);
   const seedCount = ringCount(ring, [280, 250, 190, 110]);
   const cloverCount = Math.max(100, ringCount(ring, [830, 750, 590, 350]) - Math.round(seaK * 620));
 
@@ -1977,15 +2042,17 @@ function buildChunk(cx, cz, ring) {
     let kind;
     if (sea > 0.12) {
       // 花海：一大片一大片地同色，边缘才掺别的花
-      const zone = fbm(x * 0.028 + 71.7, z * 0.028 - 23.4, 3);
+      const zone = fbm(x * 0.013 + 71.7, z * 0.013 - 23.4, 3);
       if (zone < 0.40) kind = 2;        // 粉色波斯菊
-      else if (zone < 0.55) kind = 3;   // 白色碎花
-      else if (zone < 0.63) kind = 5;   // 红罂粟
-      else if (zone < 0.72) kind = 4;   // 蓝色勿忘我
-      else if (zone < 0.86) kind = 1;   // 黄色毛茛
+      else if (zone < 0.52) kind = 3;   // 白色碎花
+      else if (zone < 0.62) kind = 5;   // 红罂粟
+      else if (zone < 0.74) kind = 4;   // 蓝色勿忘我
+      else if (zone < 0.88) kind = 1;   // 黄色毛茛
       else kind = 0;                    // 白雏菊
-      const mixRate = 0.07 + (1 - sea) * 0.22;
-      if (rand() < mixRate) kind = Math.floor(rand() * 6);
+      // 一片只留一个主色 + 一个固定的点缀色，别把六种花搅在一起
+      const accent = kind === 2 ? 3 : kind === 5 ? 3 : kind === 4 ? 0 : kind === 1 ? 0 : 2;
+      const mixRate = 0.02 + (1 - sea) * 0.10;
+      if (rand() < mixRate) kind = accent;
     } else {
       const drift = fbm(x * 0.016 + 21, z * 0.016 - 5, 3) + (rand() - 0.5) * 0.06;
       if (drift < 0.36) kind = 0;
@@ -2004,10 +2071,10 @@ function buildChunk(cx, cz, ring) {
       sea = seaAt(x, z);
     }
 
-    const tall = rand() < 0.12;
+    const tall = rand() < (sea > 0.3 ? 0.04 : 0.12);
     const stemH = (tall ? 0.52 + rand() * 0.22 : 0.26 + rand() * 0.15) * (1 + sea * 0.50);
-    const headSize = ((kind === 3 || kind === 4 || kind === 5 ? 0.17 : tall ? 0.165 : 0.12) + rand() * 0.04)
-      * (1 + sea * 0.32);
+    const headSize = Math.min(0.2, ((kind === 3 || kind === 4 || kind === 5 ? 0.15 : tall ? 0.145 : 0.11) + rand() * 0.035)
+      * (1 + sea * 0.22));
     const phase = rand() * TAU;
 
     dummy.position.set(x, y, z);
@@ -2015,7 +2082,7 @@ function buildChunk(cx, cz, ring) {
     dummy.scale.set(1, Math.max(0.0001, stemH), 1);
     dummy.updateMatrix();
     stemMesh.setMatrixAt(i, dummy.matrix);
-    stemMesh.setColorAt(i, tmpColor.setHex(0x4d6029).offsetHSL((rand() - 0.5) * 0.03, 0, (rand() - 0.5) * 0.08));
+    stemMesh.setColorAt(i, tmpColor.setHex(0x5e7233).offsetHSL((rand() - 0.5) * 0.03, 0, (rand() - 0.5) * 0.08));
 
     buckets[kind].push({
       x,
@@ -2083,7 +2150,7 @@ function buildChunk(cx, cz, ring) {
       dummy.scale.setScalar((0.13 + rand() * 0.10) * (show ? 1 : 0.0001));
       dummy.updateMatrix();
       lowMesh.setMatrixAt(i, dummy.matrix);
-      const zone = fbm(x * 0.028 + 71.7, z * 0.028 - 23.4, 3);
+      const zone = fbm(x * 0.013 + 71.7, z * 0.013 - 23.4, 3);
       const zp = zone < 0.40 ? 0 : zone < 0.55 ? 1 : zone < 0.63 ? 2 : zone < 0.72 ? 3 : zone < 0.86 ? 4 : 5;
       const pal = lowTints[rand() < 0.82 ? zp : Math.floor(rand() * 6)];
       lowMesh.setColorAt(i, tmpColor.setHex(pal[Math.floor(rand() * pal.length)]));
