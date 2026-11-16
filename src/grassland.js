@@ -342,6 +342,36 @@ sunLight.shadow.mapSize.set(2048, 2048);
 sunLight.shadow.camera.near = 1;
 sunLight.shadow.camera.far = 280;
 const SHADOW_SPAN = 38;
+
+/* 把阴影相机的焦点吸附到「光空间的像素格」。
+   阴影贴图是按光的方向投影的，所以吸附也必须在这个坐标系里做，
+   只吸世界 XZ 是不够的。 */
+const _shadowRight = new THREE.Vector3();
+const _shadowUp = new THREE.Vector3();
+const _shadowDir = new THREE.Vector3();
+const _shadowFocus = new THREE.Vector3();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+
+function snapShadowFocus(x, y, z, dir, out) {
+  const texel = (SHADOW_SPAN * 2) / (sunLight.shadow.mapSize.x || 2048);
+  _shadowDir.copy(dir).normalize();
+  _shadowRight.crossVectors(WORLD_UP, _shadowDir);
+  if (_shadowRight.lengthSq() < 1e-6) _shadowRight.set(1, 0, 0);
+  _shadowRight.normalize();
+  _shadowUp.crossVectors(_shadowDir, _shadowRight).normalize();
+
+  const a = x * _shadowRight.x + y * _shadowRight.y + z * _shadowRight.z;
+  const b = x * _shadowUp.x + y * _shadowUp.y + z * _shadowUp.z;
+  const da = Math.round(a / texel) * texel - a;
+  const db = Math.round(b / texel) * texel - b;
+
+  out.set(
+    x + _shadowRight.x * da + _shadowUp.x * db,
+    y + _shadowRight.y * da + _shadowUp.y * db,
+    z + _shadowRight.z * da + _shadowUp.z * db
+  );
+  return out;
+}
 sunLight.shadow.camera.left = -SHADOW_SPAN;
 sunLight.shadow.camera.right = SHADOW_SPAN;
 sunLight.shadow.camera.top = SHADOW_SPAN;
@@ -5158,12 +5188,16 @@ function updateWorld(t, dt) {
 
   // 阳光跟着玩家走，38 米的阴影范围才不浪费
   const gy = heightAt(player.x, player.z);
-  sunLight.position.set(player.x, gy, player.z).addScaledVector(SUN_DIR, 150);
-  sunLight.target.position.set(player.x, gy, player.z);
+  // 阴影相机跟着人走，但必须吸附到阴影贴图的像素格上：
+  // 否则网格每帧都在人脚下滑动，草和栅栏的阴影边缘会一直"爬"，看着就是闪
+  snapShadowFocus(player.x, gy, player.z, SUN_DIR, _shadowFocus);
+  sunLight.position.copy(_shadowFocus).addScaledVector(SUN_DIR, 150);
+  sunLight.target.position.copy(_shadowFocus);
   sunLight.target.updateMatrixWorld();
 
-  moonLight.position.set(player.x, gy, player.z).addScaledVector(MOON_DIR, 130);
-  moonLight.target.position.set(player.x, gy, player.z);
+  snapShadowFocus(player.x, gy, player.z, MOON_DIR, _shadowFocus);
+  moonLight.position.copy(_shadowFocus).addScaledVector(MOON_DIR, 130);
+  moonLight.target.position.copy(_shadowFocus);
   moonLight.target.updateMatrixWorld();
 
   // 花粉

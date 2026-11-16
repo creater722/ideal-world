@@ -15,7 +15,7 @@ const GradeShader = {
   uniforms: {
     tDiffuse: { value: null },
     uTime: { value: 0 },
-    uGrain: { value: 0.019 },
+    uGrain: { value: 0.013 },
     uVignette: { value: 1.0 },
     uAberration: { value: 0.0013 },
     uWarmth: { value: new THREE.Vector3(1.02, 1.0, 0.978) },
@@ -62,8 +62,9 @@ const GradeShader = {
       // 正午的热浪：只在地平线附近轻轻抖一下 uv，别让人看出是特效
       vec2 suv = uv;
       if (uHeat > 0.001) {
-        float w = sin(uv.x * 63.0 + uTime * 2.6) * sin(uv.y * 43.0 - uTime * 2.1);
-        suv += vec2(w * 0.0009, w * 0.0006) * uHeat * smoothstep(0.46, 0.96, uv.y);
+        // 空间频率别太高：太密会在一帧里就产生摩尔纹，动起来像闪屏
+        float w = sin(uv.x * 17.0 + uTime * 1.05) * sin(uv.y * 12.0 - uTime * 0.85);
+        suv += vec2(w * 0.0012, w * 0.0008) * uHeat * smoothstep(0.46, 0.96, uv.y);
       }
 
       // 横向色差：越靠边越明显，模拟镜头
@@ -116,7 +117,9 @@ const GradeShader = {
       // 胶片颗粒（亮度越高越轻，避免死白死黑里冒沙子）
       float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
       float grainMask = smoothstep(0.0, 0.22, lum) * (1.0 - smoothstep(0.85, 2.2, lum));
-      float n = rand(uv * vec2(1920.0, 1080.0) + fract(uTime) * 137.0) - 0.5;
+      // 固定种子：颗粒只是用来打散天空色阶，不能随时间变，
+      // 否则每帧都是全新噪声 = 整屏每秒闪 60 次
+      float n = rand(uv * vec2(1920.0, 1080.0) + 19.0) - 0.5;
       col += n * uGrain * grainMask;
 
       col = mix(col, vec3(1.0), uFade * 0.0);
