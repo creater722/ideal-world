@@ -412,6 +412,41 @@ function makeGroundTexture() {
 }
 
 /* 花瓣层：撒在地上的碎花，给花海和草地补一层近看才有的细节 */
+function makeFallenLeafTexture() {
+  const S = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, S, S);
+  ctx.translate(S / 2, S / 2);
+  ctx.beginPath();
+  ctx.moveTo(0, -S * 0.42);
+  ctx.bezierCurveTo(S * 0.33, -S * 0.2, S * 0.31, S * 0.22, 0, S * 0.42);
+  ctx.bezierCurveTo(-S * 0.31, S * 0.22, -S * 0.33, -S * 0.2, 0, -S * 0.42);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255,255,255,1)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(198,198,198,0.55)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, -S * 0.34);
+  ctx.lineTo(0, S * 0.36);
+  ctx.stroke();
+  ctx.lineWidth = 1.4;
+  for (let i = -2; i <= 2; i++) {
+    const y = i * S * 0.12;
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.quadraticCurveTo(sgn * S * 0.09, y + S * 0.03, sgn * S * 0.18, y + S * 0.09);
+      ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function makePetalScatterTexture() {
   const S = 512;
   const c = document.createElement('canvas');
@@ -444,6 +479,23 @@ function makePetalScatterTexture() {
       ctx.fill();
       ctx.restore();
     }
+  }
+
+  // 再撒一层枯叶，地面才像"落下来过东西"
+  const leaves = [[176, 132, 74], [154, 112, 60], [196, 156, 96], [138, 100, 56]];
+  for (let i = 0; i < 150; i++) {
+    const x = rnd() * S;
+    const y = rnd() * S;
+    const L = leaves[Math.floor(rnd() * leaves.length)];
+    const r = 2.4 + rnd() * 3.4;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rnd() * Math.PI);
+    ctx.fillStyle = `rgba(${L[0]},${L[1]},${L[2]},${0.45 + rnd() * 0.4})`;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r, r * 0.46, 0, 0, TAU);
+    ctx.fill();
+    ctx.restore();
   }
 
   const tex = new THREE.CanvasTexture(c);
@@ -1837,6 +1889,13 @@ const cloverGeoBase = makeGrassCardGeometry(2, 2);
 const petalGeoBase = new THREE.PlaneGeometry(1, 1);
 petalGeoBase.rotateX(-Math.PI / 2);
 
+const fallenLeafMat = new THREE.MeshLambertMaterial({
+  map: makeFallenLeafTexture(),
+  transparent: true,
+  alphaTest: 0.4,
+  side: THREE.DoubleSide,
+});
+
 const chunks = new Map();
 const dummy = new THREE.Object3D();
 const tmpColor = new THREE.Color();
@@ -2199,7 +2258,7 @@ function buildChunk(cx, cz, ring) {
 
   /* 落花：被风吹下来的花瓣，铺在花根之间，近看才有的一层细节 */
   if (seaK > 0.08) {
-    const petalCount = Math.round(seaK * 900);
+    const petalCount = Math.round(seaK * 2200);
     const petalGeo = petalGeoBase.clone();
     const petalMesh = new THREE.InstancedMesh(petalGeo, flowerMaterials[2], petalCount);
     const petalPhases = new Float32Array(petalCount);
@@ -2210,9 +2269,9 @@ function buildChunk(cx, cz, ring) {
       const z = baseZ + rand() * CHUNK;
       const y = heightAt(x, z);
       const inSea = seaAt(x, z) > 0.14;
-      dummy.position.set(x, inSea ? y + 0.012 : -999, z);
+      dummy.position.set(x, inSea ? y + 0.055 : -999, z);
       dummy.rotation.set((rand() - 0.5) * 0.16, rand() * TAU, (rand() - 0.5) * 0.16);
-      dummy.scale.setScalar((0.055 + rand() * 0.075) * (inSea ? 1 : 0.0001));
+      dummy.scale.setScalar((0.07 + rand() * 0.09) * (inSea ? 1 : 0.0001));
       dummy.updateMatrix();
       petalMesh.setMatrixAt(i, dummy.matrix);
       petalMesh.setColorAt(i, tmpColor.setHex(tints[Math.floor(rand() * tints.length)]));
@@ -2224,6 +2283,37 @@ function buildChunk(cx, cz, ring) {
     petalMesh.computeBoundingSphere();
     petalMesh.frustumCulled = false;
     group.add(petalMesh);
+  }
+
+  /* 落叶：铺在花根之间的褐叶，和花瓣混着来 */
+  if (seaK > 0.08) {
+    const fallenCount = Math.round(seaK * 1100);
+    const fallenGeo = petalGeoBase.clone();
+    const fallenMesh = new THREE.InstancedMesh(fallenGeo, fallenLeafMat, fallenCount);
+    const fallenPhases = new Float32Array(fallenCount);
+    const fallenStiffs = new Float32Array(fallenCount);
+    const leafTints = [0xb57a3e, 0xc08c4c, 0x8f6634, 0xd6a45c, 0xa06030, 0xcaa060];
+    for (let i = 0; i < fallenCount; i++) {
+      const x = baseX + rand() * CHUNK;
+      const z = baseZ + rand() * CHUNK;
+      const y = heightAt(x, z);
+      const inSea = seaAt(x, z) > 0.14;
+      dummy.position.set(x, inSea ? y + 0.062 : -999, z);
+      dummy.rotation.set(-Math.PI / 2 + (rand() - 0.5) * 0.3, rand() * TAU, 0);
+      const sz = 0.16 + rand() * 0.15;
+      dummy.scale.set(sz, inSea ? sz * (0.85 + rand() * 0.3) : 0.0001, sz);
+      dummy.updateMatrix();
+      fallenMesh.setMatrixAt(i, dummy.matrix);
+      fallenMesh.setColorAt(i, tmpColor.setHex(leafTints[Math.floor(rand() * leafTints.length)])
+        .offsetHSL((rand() - 0.5) * 0.02, 0, (rand() - 0.5) * 0.06));
+      fallenPhases[i] = rand() * TAU;
+      fallenStiffs[i] = 0;
+    }
+    fallenGeo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(fallenPhases, 1));
+    fallenGeo.setAttribute('aStiff', new THREE.InstancedBufferAttribute(fallenStiffs, 1));
+    fallenMesh.computeBoundingSphere();
+    fallenMesh.frustumCulled = false;
+    group.add(fallenMesh);
   }
 
   return { group, cx, cz };
