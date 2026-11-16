@@ -11,20 +11,20 @@ import { clamp, lerp, smoothstep } from './grasscore.js';
    这样从出生点望向农场时是顺光，草和羊都是亮的；
    黄昏的暖边留在身后，转身就能看见。 */
 export const TIME_KEYS = [
-  { h: 0.0, elev: -26, az: 84, sun: 0x8fa6c6, sunI: 0.07, zenith: 0x060f1d, horizon: 0x131f30, haze: 0x1c2a3a, cloud: 0x33445a, fog: 0x121b26, fogD: 0.0072, hemiSky: 0x1b2a42, hemiGround: 0x0c1109, hemiI: 0.32, expo: 1.05, cover: 0.30 },
-  { h: 4.9, elev: -7, az: 62, sun: 0xb9877a, sunI: 0.12, zenith: 0x152846, horizon: 0x4b586e, haze: 0x6c6374, cloud: 0x69718a, fog: 0x2f3947, fogD: 0.0070, hemiSky: 0x2f4262, hemiGround: 0x121810, hemiI: 0.42, expo: 1.03, cover: 0.42 },
+  { h: 0.0, elev: -26, az: 84, sun: 0x8fa6c6, sunI: 0.07, zenith: 0x051224, horizon: 0x122642, haze: 0x1c2a3a, cloud: 0x33445a, fog: 0x121b26, fogD: 0.0072, hemiSky: 0x1b2a42, hemiGround: 0x0c1109, hemiI: 0.32, expo: 1.05, cover: 0.30 },
+  { h: 4.9, elev: -7, az: 62, sun: 0xb9877a, sunI: 0.12, zenith: 0x152846, horizon: 0x53607a, haze: 0x6c6374, cloud: 0x69718a, fog: 0x2f3947, fogD: 0.0070, hemiSky: 0x2f4262, hemiGround: 0x121810, hemiI: 0.42, expo: 1.03, cover: 0.42 },
   { h: 6.3, elev: 3, az: 112, sun: 0xffb07a, sunI: 0.9, zenith: 0x35608f, horizon: 0xffbe93, haze: 0xffc9a2, cloud: 0xffc9b0, fog: 0xd2a68c, fogD: 0.0068, hemiSky: 0x7a8db2, hemiGround: 0x2a3220, hemiI: 0.6, expo: 1.02, cover: 0.5 },
   { h: 8.8, elev: 33, az: 122, sun: 0xffe8bc, sunI: 2.7, zenith: 0x3e81c6, horizon: 0xf6edd4, haze: 0xffe4bd, cloud: 0xfff9ef, fog: 0xd9dcc9, fogD: 0.0058, hemiSky: 0xb7d2ef, hemiGround: 0x53622c, hemiI: 0.92, expo: 1.02, cover: 0.4 },
   { h: 12.5, elev: 61, az: 134, sun: 0xfff5da, sunI: 3.3, zenith: 0x2f74bd, horizon: 0xf2ecd8, haze: 0xffeac6, cloud: 0xfffdf6, fog: 0xd6dbc8, fogD: 0.0052, hemiSky: 0xbcd6f2, hemiGround: 0x5a6830, hemiI: 1.02, expo: 1.0, cover: 0.34 },
   { h: 16.4, elev: 27, az: 145, sun: 0xffeab8, sunI: 3.0, zenith: 0x3f7fc4, horizon: 0xf7eed0, haze: 0xffdfae, cloud: 0xfffaf0, fog: 0xd9dcc9, fogD: 0.0058, hemiSky: 0xbcd6f2, hemiGround: 0x5a6830, hemiI: 0.95, expo: 1.02, cover: 0.42 },
   { h: 18.0, elev: 12, az: 150, sun: 0xffbf74, sunI: 2.2, zenith: 0x557fa8, horizon: 0xffd09a, haze: 0xffb775, cloud: 0xffd2b4, fog: 0xe0b896, fogD: 0.0066, hemiSky: 0x93a5c6, hemiGround: 0x474426, hemiI: 0.72, expo: 1.03, cover: 0.5 },
   { h: 18.45, elev: 7.5, az: 154, sun: 0xffb264, sunI: 1.95, zenith: 0x3d6b96, horizon: 0xffc98f, haze: 0xffb078, cloud: 0xffd0b0, fog: 0xe6b48e, fogD: 0.0068, hemiSky: 0x8a9fc0, hemiGround: 0x4c4428, hemiI: 0.66, expo: 1.02, cover: 0.56 },
-  { h: 19.0, elev: 2, az: 160, sun: 0xff9a52, sunI: 1.4, zenith: 0x45658f, horizon: 0xffbd82, haze: 0xff9f5f, cloud: 0xffc39c, fog: 0xdcab86, fogD: 0.0070, hemiSky: 0x7f8cae, hemiGround: 0x3c3720, hemiI: 0.6, expo: 1.0, cover: 0.52 },
-  { h: 19.42, elev: -0.5, az: 164, sun: 0xff8a52, sunI: 1.0, zenith: 0x2f4a72, horizon: 0xff9d6c, haze: 0xff8856, cloud: 0xf5ac96, fog: 0xd49c84, fogD: 0.0072, hemiSky: 0x6c7ca4, hemiGround: 0x352e1c, hemiI: 0.58, expo: 1.0, cover: 0.52 },
-  { h: 19.8, elev: -2, az: 168, sun: 0xff7d45, sunI: 0.7, zenith: 0x3a5784, horizon: 0xff9a64, haze: 0xff7d48, cloud: 0xf3a98c, fog: 0xcc9578, fogD: 0.0074, hemiSky: 0x66779c, hemiGround: 0x2e2a1b, hemiI: 0.5, expo: 1.0, cover: 0.46 },
-  { h: 20.7, elev: -8, az: 172, sun: 0xe98a68, sunI: 0.22, zenith: 0x273e60, horizon: 0x9c6555, haze: 0xa3654c, cloud: 0x8a7680, fog: 0x7c5b56, fogD: 0.0076, hemiSky: 0x44567a, hemiGround: 0x1d2216, hemiI: 0.48, expo: 1.02, cover: 0.4 },
-  { h: 21.7, elev: -17, az: 62, sun: 0x9fb6d8, sunI: 0.1, zenith: 0x0d2039, horizon: 0x21344c, haze: 0x2a3c52, cloud: 0x44556b, fog: 0x1e2e40, fogD: 0.0072, hemiSky: 0x3a5478, hemiGround: 0x121810, hemiI: 0.5, expo: 1.04, cover: 0.34 },
-  { h: 23.3, elev: -25, az: 68, sun: 0x8fa6c6, sunI: 0.07, zenith: 0x07111f, horizon: 0x162334, haze: 0x1e2c3d, cloud: 0x36475c, fog: 0x141d27, fogD: 0.0071, hemiSky: 0x2a405e, hemiGround: 0x0e1410, hemiI: 0.46, expo: 1.05, cover: 0.3 },
+  { h: 19.0, elev: 2, az: 160, sun: 0xff9a52, sunI: 1.4, zenith: 0x3f5f96, horizon: 0xffb07d, haze: 0xff8f6a, cloud: 0xffc39c, fog: 0xdcaa88, fogD: 0.0070, hemiSky: 0x7f8cae, hemiGround: 0x3c3720, hemiI: 0.6, expo: 1.0, cover: 0.52 },
+  { h: 19.42, elev: -0.5, az: 164, sun: 0xff8a52, sunI: 1.0, zenith: 0x2a4272, horizon: 0xff8c78, haze: 0xff7a63, cloud: 0xf5ac98, fog: 0xd49c86, fogD: 0.0072, hemiSky: 0x6c7ca4, hemiGround: 0x352e1c, hemiI: 0.58, expo: 1.0, cover: 0.52 },
+  { h: 19.8, elev: -2, az: 168, sun: 0xff7d45, sunI: 0.7, zenith: 0x334e84, horizon: 0xff8878, haze: 0xff6f58, cloud: 0xf3a98c, fog: 0xcc9578, fogD: 0.0074, hemiSky: 0x66779c, hemiGround: 0x2e2a1b, hemiI: 0.5, expo: 1.0, cover: 0.46 },
+  { h: 20.7, elev: -8, az: 172, sun: 0xe98a68, sunI: 0.22, zenith: 0x1f3a68, horizon: 0x8f6478, haze: 0x9a6580, cloud: 0x8a7680, fog: 0x7c5b56, fogD: 0.0076, hemiSky: 0x44567a, hemiGround: 0x1d2216, hemiI: 0.48, expo: 1.02, cover: 0.4 },
+  { h: 21.7, elev: -17, az: 62, sun: 0x9fb6d8, sunI: 0.1, zenith: 0x0a1c38, horizon: 0x1d3352, haze: 0x2a3c52, cloud: 0x44556b, fog: 0x1e2e40, fogD: 0.0072, hemiSky: 0x3a5478, hemiGround: 0x121810, hemiI: 0.5, expo: 1.04, cover: 0.34 },
+  { h: 23.3, elev: -25, az: 68, sun: 0x8fa6c6, sunI: 0.07, zenith: 0x061428, horizon: 0x132845, haze: 0x1e2c3d, cloud: 0x36475c, fog: 0x141d27, fogD: 0.0071, hemiSky: 0x2a405e, hemiGround: 0x0e1410, hemiI: 0.46, expo: 1.05, cover: 0.3 },
 ];
 
 for (const k of TIME_KEYS) {
@@ -184,7 +184,7 @@ export function createTimeOfDay(startHour = 16.4) {
         from: hour,
         diff,
         elapsed: 0,
-        duration: clamp(diff * 3.4, 6, 13),
+        duration: clamp(diff * 6.0, 11, 26),
         line: anchor.line,
       };
       return anchor.line;

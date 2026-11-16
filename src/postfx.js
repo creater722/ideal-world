@@ -24,6 +24,7 @@ const GradeShader = {
     uSunVis: { value: 0.0 },
     uSunColor: { value: new THREE.Color(0xffd9a0) },
     uDusk: { value: 0.0 },
+    uHeat: { value: 0.0 },
     uFade: { value: 0.0 },
   },
   vertexShader: /* glsl */ `
@@ -45,6 +46,7 @@ const GradeShader = {
     uniform float uSunVis;
     uniform vec3 uSunColor;
     uniform float uDusk;
+    uniform float uHeat;
     uniform float uFade;
     varying vec2 vUv;
 
@@ -57,12 +59,19 @@ const GradeShader = {
       vec2 center = uv - 0.5;
       float r2 = dot(center, center);
 
+      // 正午的热浪：只在地平线附近轻轻抖一下 uv，别让人看出是特效
+      vec2 suv = uv;
+      if (uHeat > 0.001) {
+        float w = sin(uv.x * 63.0 + uTime * 2.6) * sin(uv.y * 43.0 - uTime * 2.1);
+        suv += vec2(w * 0.0009, w * 0.0006) * uHeat * smoothstep(0.46, 0.96, uv.y);
+      }
+
       // 横向色差：越靠边越明显，模拟镜头
       vec2 dir = center * uAberration * (0.35 + r2 * 2.2);
       vec3 col;
-      col.r = texture2D(tDiffuse, uv + dir).r;
-      col.g = texture2D(tDiffuse, uv).g;
-      col.b = texture2D(tDiffuse, uv - dir).b;
+      col.r = texture2D(tDiffuse, suv + dir).r;
+      col.g = texture2D(tDiffuse, suv).g;
+      col.b = texture2D(tDiffuse, suv - dir).b;
 
       // 日光晕：必须沿"像素 → 太阳"这条射线取样，才是射出来的光
       if (uSunVis > 0.001) {

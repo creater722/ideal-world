@@ -283,6 +283,14 @@
   .save-hello { font-size: 11.5px; letter-spacing: .1em; color: #434a2c; margin-bottom: 4px; }
   .save-meta { font-size: 9.5px; letter-spacing: .08em; color: rgba(59, 58, 40, .46); min-height: 14px; margin-bottom: 8px; }
   .save-backup { display: flex; gap: 8px; margin-top: 10px; }
+  .save-link {
+    display: block; margin-top: 12px; padding: 4px;
+    font-size: 10px; letter-spacing: .12em; text-align: center;
+    color: rgba(70, 78, 42, .62); text-decoration: none;
+    border-bottom: 1px solid rgba(85, 96, 47, .2);
+    transition: color .24s ease, border-color .24s ease;
+  }
+  .save-link:hover { color: #46512d; border-color: rgba(85, 96, 47, .46); }
   .save-note {
     margin-top: 9px; font-size: 9.5px; line-height: 1.55; letter-spacing: .06em;
     color: rgba(59, 58, 40, .4); text-align: left;
@@ -608,6 +616,7 @@
           <button class="save-btn primary" id="save-login">登录</button>
           <button class="save-btn" id="save-register">注册</button>
         </div>
+        <a class="save-link" id="save-open-login" href="./login.html">打开独立登录页 →</a>
       </div>
 
       <div id="save-user-box" hidden>

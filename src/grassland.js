@@ -7,7 +7,8 @@ import * as THREE from 'three';
 import {
   TAU, clamp, lerp, smoothstep, valueNoise, fbm, mulberry32,
   heightAt, pathDistance, insideFarmWork, meadowBoost, grazeFactor, farmMowFactor,
-  FARM, WORLD, PATH_POINTS, INNER_PATH_POINTS, MEADOWS,
+  flowerSeaFactor,
+  FARM, WORLD, PATH_POINTS, INNER_PATH_POINTS, MEADOWS, FLOWER_SEA,
 } from './grasscore.js';
 import { createPostFX } from './postfx.js';
 import { createMusic } from './music.js';
@@ -29,6 +30,15 @@ window.addEventListener('unhandledrejection', (e) => {
   window.__err.push('REJ:' + String(e.reason));
   document.title = 'REJ:' + String(e.reason);
 });
+
+// 着色器编译失败只会 console.error，不会抛异常，这里顺手记下来
+const __consoleError = console.error.bind(console);
+console.error = (...args) => {
+  try {
+    window.__err.push(args.map((a) => String(a)).join(' ').slice(0, 300));
+  } catch (err) { /* 忽略 */ }
+  __consoleError(...args);
+};
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -76,6 +86,7 @@ const skyUniforms = {
   uSunColor: { value: new THREE.Color(0xfff4d8) },
   uCloud: { value: new THREE.Color(0xfffcf4) },
   uNight: { value: 0 },
+  uStars: { value: 0 },
   uDusk: { value: 0 },
   uCover: { value: 0.56 },
 };
@@ -90,6 +101,7 @@ const skyFrag = /* glsl */ `
   uniform vec3 uSunColor;
   uniform vec3 uCloud;
   uniform float uNight;
+  uniform float uStars;
   uniform float uDusk;
   uniform float uCover;
   varying vec3 vDir;
@@ -124,7 +136,8 @@ const skyFrag = /* glsl */ `
 
     // 积云：底暗顶亮。黄昏时暗面转紫、亮面吃暖光
     if (dir.y > 0.006) {
-      vec2 cp = dir.xz / (dir.y + 0.15) * 1.28;
+      // 穹顶投影：分母留得比 0.16 大很多，靠近地平线才不会被拉成放射条纹
+      vec2 cp = dir.xz * 3.2 / (dir.y * 0.85 + 0.55);
       vec2 drift = vec2(uTime * 0.0020, uTime * 0.0008);
       float base = fbm2(cp * 0.55 + drift);
       float detail = fbm2(cp * 1.62 + drift * 2.2 + 11.0);
@@ -135,13 +148,17 @@ const skyFrag = /* glsl */ `
       cover *= smoothstep(0.006, 0.10, dir.y);
 
       float lit = smoothstep(thr, thr + 0.25, c);
-      vec3 shade = uCloud * (0.47 + 0.14 * uNight) * mix(vec3(1.0), vec3(0.60, 0.52, 0.74), uDusk);
-      vec3 litCol = mix(uCloud * 1.12, uSunColor, 0.30 + uDusk * 0.55);
+      vec3 shade = uCloud * mix(0.47, 0.16, uNight) * mix(vec3(1.0), vec3(0.60, 0.52, 0.74), uDusk);
+      vec3 litCol = mix(
+        uCloud * mix(1.12, 0.30, uNight),
+        uSunColor,
+        (0.30 + uDusk * 0.55) * (1.0 - uNight * 0.82)
+      );
       vec3 cloudCol = mix(shade, litCol, lit);
 
       float back = pow(max(dot(dir, uSunDir), 0.0), 5.0);
       cloudCol += uSunColor * back * (1.0 - lit) * (0.36 + uDusk * 0.9);
-      col = mix(col, cloudCol, cover * 0.80);
+      col = mix(col, cloudCol, cover * mix(0.80, 0.55, uNight));
     }
 
     // 黄昏：太阳那一侧烧成金橙，另一侧留冷青
@@ -161,23 +178,47 @@ const skyFrag = /* glsl */ `
     float sunPeak = mix(4.6, 2.0, uDusk);
     col += uSunColor * (pow(sd, 15000.0) * sunPeak + pow(sd, 520.0) * mix(0.18, 0.26, uDusk) + pow(sd, 13.0) * 0.04);
 
-    // 星空与银河
-    if (uNight > 0.01 && dir.y > 0.02) {
+    // 星空与银河（等天真的黑下来才出现，别在日落时抢戏）
+    if (uStars > 0.01 && dir.y > 0.0) {
       vec2 sph = vec2(atan(dir.z, dir.x), asin(clamp(dir.y, -1.0, 1.0))) * 230.0;
       vec2 id = floor(sph);
       vec2 f = fract(sph) - 0.5;
       float h = hash(id);
-      float twinkle = 0.6 + 0.4 * sin(uTime * 1.7 + h * 63.0);
-      float star = smoothstep(0.06, 0.0, length(f)) * step(0.972, h) * twinkle;
-      float band = exp(-pow((dir.x * 0.7 + dir.z * 0.7) * 3.2, 2.0));
-      col += vec3(0.80, 0.86, 1.0) * star * uNight * smoothstep(0.02, 0.2, dir.y) * 1.4;
-      col += vec3(0.34, 0.38, 0.52) * band * uNight * 0.055 * smoothstep(0.05, 0.4, dir.y);
+      float twinkle = 0.55 + 0.45 * sin(uTime * 1.4 + h * 63.0);
+      float star = smoothstep(0.075, 0.0, length(f)) * step(0.966, h) * twinkle;
+
+      // 第二层更密更暗的小星，让天不是"撒了几十颗"
+      vec2 sph2 = sph * 2.17 + 31.0;
+      vec2 id2 = floor(sph2);
+      float h2 = hash(id2);
+      vec2 f2 = fract(sph2) - 0.5;
+      float star2 = smoothstep(0.055, 0.0, length(f2)) * step(0.982, h2) * (0.5 + 0.5 * sin(uTime * 0.9 + h2 * 88.0));
+
+      float upMask = smoothstep(0.02, 0.22, dir.y);
+      col += vec3(0.82, 0.88, 1.0) * (star * 1.35 + star2 * 0.7) * uStars * upMask;
+
+      // 银河：一条斜穿天球的带子，云絮 + 暗尘 + 更密的星
+      vec3 bandN = normalize(vec3(0.46, 0.30, -0.83));
+      float dBand = dot(dir, bandN);
+      float core = exp(-pow(dBand * 11.0, 2.0));
+      float halo = exp(-pow(dBand * 3.4, 2.0));
+      // 用银河自己的切向坐标采样：方位角采样会在天顶拧成放射状条纹
+      vec3 bandT = normalize(cross(bandN, vec3(0.0, 1.0, 0.0)));
+      vec3 bandB = cross(bandN, bandT);
+      vec2 bandUv = vec2(dot(dir, bandT) * 5.5, dot(dir, bandB) * 11.0);
+      float cloud = fbm2(bandUv * 1.2 + 3.1);
+      float dust = fbm2(bandUv * 2.6 - 7.7);
+      float lanes = mix(0.42, 1.0, smoothstep(0.34, 0.66, dust))
+                  * mix(0.5, 1.0, smoothstep(0.06, 0.26, abs(dBand)));
+      float milky = (halo * 0.20 + core * 0.95) * (0.20 + cloud * 1.05) * lanes;
+      col += vec3(0.62, 0.66, 0.90) * milky * uStars * smoothstep(0.05, 0.30, dir.y) * 0.46;
+      col += vec3(0.80, 0.85, 1.0) * star * uStars * core * upMask * 3.0;
     }
 
     // 月亮
-    if (uNight > 0.01) {
+    if (uStars > 0.01) {
       float md = max(dot(dir, uMoonDir), 0.0);
-      col += vec3(1.0, 0.97, 0.89) * (pow(md, 9000.0) * 7.0 + pow(md, 420.0) * 0.24) * uNight;
+      col += vec3(1.0, 0.97, 0.89) * (pow(md, 9000.0) * 7.0 + pow(md, 420.0) * 0.24) * uStars;
     }
 
     gl_FragColor = vec4(col, 1.0);
@@ -320,6 +361,80 @@ function makeGroundTexture() {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(64, 64);
   tex.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
+  return tex;
+}
+
+/* 花瓣层：撒在地上的碎花，给花海和草地补一层近看才有的细节 */
+function makePetalScatterTexture() {
+  const S = 512;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, S, S);
+  const rnd = mulberry32(9091);
+  const petals = [
+    [244, 178, 198], [252, 236, 240], [247, 214, 98],
+    [226, 112, 88], [186, 204, 240], [255, 250, 232],
+  ];
+
+  // 一簇一簇地撒，不要均匀铺满，地面才透气
+  for (let cl = 0; cl < 300; cl++) {
+    const cx = rnd() * S;
+    const cy = rnd() * S;
+    const spread = 8 + rnd() * 26;
+    const n = 2 + Math.floor(rnd() * 7);
+    for (let i = 0; i < n; i++) {
+      const x = cx + (rnd() - 0.5) * spread;
+      const y = cy + (rnd() - 0.5) * spread;
+      const p = petals[Math.floor(rnd() * petals.length)];
+      const r = 1.6 + rnd() * 2.8;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rnd() * Math.PI);
+      ctx.fillStyle = `rgba(${p[0]},${p[1]},${p[2]},${0.5 + rnd() * 0.45})`;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r, r * (0.5 + rnd() * 0.4), 0, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return tex;
+}
+
+/* 云影贴图：周期性的软噪声，草和地面按它被云遮暗 */
+function makeCloudShadowTexture() {
+  const S = 128;
+  const data = new Uint8Array(S * S * 4);
+  const T = Math.PI * 2;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const u = x / S;
+      const v = y / S;
+      // 三组正弦叠加：天然可平铺，没有接缝
+      let n = 0.52
+        + 0.20 * Math.sin(T * u * 2 + 1.3) * Math.cos(T * (v * 3 + 0.4))
+        + 0.13 * Math.sin(T * (u * 5 - 2.1) + 1.7) * Math.cos(T * (v * 4 + 1.1))
+        + 0.07 * Math.cos(T * (u * 9 + 0.2)) * Math.sin(T * (v * 7 - 0.9));
+      n = Math.min(1, Math.max(0, n));
+      const c = Math.round(255 * n);
+      const i = (y * S + x) * 4;
+      data[i] = c;
+      data[i + 1] = c;
+      data[i + 2] = c;
+      data[i + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
   return tex;
 }
 
@@ -865,6 +980,7 @@ let terrainMesh = null;
   }
 
   const colorArr = new Float32Array(count * 3);
+  const seaArr = new Float32Array(count);
   const col = new THREE.Color();
   const rowLen = SEG + 1;
   const cell = SIZE / SEG;
@@ -874,6 +990,14 @@ let terrainMesh = null;
   const grassDry = new THREE.Color(0xcbbf83);
   const trail = new THREE.Color(0x9c8258);
   const hillTone = new THREE.Color(0x969a70);
+
+  // 花海的底色：一片粉、一片白、一片红，远处先看见的是这些色块
+  const seaFloor = new THREE.Color(0x6f7f3f);
+  const seaPink = new THREE.Color(0xb3788c);
+  const seaWhite = new THREE.Color(0xb3ae95);
+  const seaRed = new THREE.Color(0xa3584a);
+  const seaBlue = new THREE.Color(0x8b97b4);
+  const seaGold = new THREE.Color(0xb09a58);
 
   for (let i = 0; i < count; i++) {
     const x = XS[i];
@@ -897,6 +1021,21 @@ let terrainMesh = null;
     const far = smoothstep(WORLD.hillStart, WORLD.hillFull, r);
     if (far > 0) col.lerp(hillTone, far * 0.5);
 
+    // 花海：地面先暗成深绿，再被大片同色的花染上颜色
+    const sea = flowerSeaFactor(x, z);
+    seaArr[i] = sea;
+    if (sea > 0.002) {
+      col.lerp(seaFloor, sea * 0.26);
+      const zone = fbm(x * 0.028 + 71.7, z * 0.028 - 23.4, 3);
+      const tint =
+        zone < 0.40 ? seaPink :
+        zone < 0.55 ? seaWhite :
+        zone < 0.63 ? seaRed :
+        zone < 0.72 ? seaBlue :
+        zone < 0.86 ? seaGold : seaWhite;
+      col.lerp(tint, sea * 0.44);
+    }
+
     // 坡度
     const ix = i % rowLen;
     const iz = (i / rowLen) | 0;
@@ -915,6 +1054,9 @@ let terrainMesh = null;
 
   geo.computeVertexNormals();
   geo.setAttribute('color', new THREE.BufferAttribute(colorArr, 3));
+  geo.setAttribute('aSea', new THREE.BufferAttribute(seaArr, 1));
+
+  const petalScatterTex = makePetalScatterTexture();
 
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
@@ -922,6 +1064,52 @@ let terrainMesh = null;
     roughness: 1.0,
     metalness: 0.0,
   });
+
+  // 地面也要吃云影，否则云飘过去只有草在暗
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uCloudMap = sharedUniforms.uCloudMap;
+    shader.uniforms.uCloudOffset = sharedUniforms.uCloudOffset;
+    shader.uniforms.uCloudAmount = sharedUniforms.uCloudAmount;
+    shader.uniforms.uPetalMap = { value: petalScatterTex };
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nattribute float aSea;\nvarying vec3 vCloudPos;\nvarying float vSea;'
+      )
+      .replace(
+        '#include <project_vertex>',
+        '#include <project_vertex>\n  vCloudPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\n  vSea = aSea;'
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nuniform sampler2D uCloudMap;\nuniform vec2 uCloudOffset;\nuniform float uCloudAmount;\nuniform sampler2D uPetalMap;\nvarying vec3 vCloudPos;\nvarying float vSea;'
+      )
+      .replace(
+        '#include <map_fragment>',
+        [
+          '#include <map_fragment>',
+          'if (vSea > 0.01) {',
+          '  vec2 fp1 = vCloudPos.xz * 0.145;',
+          '  vec2 fp2 = vCloudPos.xz * 0.058 + vec2(0.37, 0.19);',
+          '  vec4 p1 = texture2D(uPetalMap, fp1);',
+          '  vec4 p2 = texture2D(uPetalMap, fp2);',
+          '  float pa = clamp(p1.a + p2.a * 0.72, 0.0, 1.0);',
+          '  vec3 pc = (p1.rgb * p1.a + p2.rgb * p2.a * 0.72) / max(1e-3, p1.a + p2.a * 0.72);',
+          '  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.70 + pc * 0.86, pa * vSea * 0.9);',
+          '}',
+        ].join('\n')
+      )
+      .replace(
+        '#include <fog_fragment>',
+        [
+          'float cloudCS = texture2D(uCloudMap, vCloudPos.xz * 0.0055 + uCloudOffset).r;',
+          'float cloudK = mix(1.0, mix(0.54, 1.03, smoothstep(0.28, 0.74, cloudCS)), uCloudAmount);',
+          'gl_FragColor.rgb *= cloudK;',
+          '#include <fog_fragment>',
+        ].join('\n')
+      );
+  };
 
   terrainMesh = new THREE.Mesh(geo, mat);
   terrainMesh.frustumCulled = false;
@@ -1006,6 +1194,7 @@ makePathRibbon(INNER_PATH_POINTS, 0.68);
 const sharedUniforms = {
   uTime: { value: 0 },
   uWind: { value: 1 },
+  uGust: { value: 0 },
   uSunDir: { value: SUN_DIR.clone() },
   uSunColor: { value: new THREE.Color(0xffeec6) },
   uSunI: { value: 1.05 },
@@ -1015,23 +1204,32 @@ const sharedUniforms = {
   uShadowMap: { value: whitePixel },
   uShadowMatrix: { value: new THREE.Matrix4() },
   uShadowTexel: { value: 1 / 2048 },
+  uCloudMap: { value: makeCloudShadowTexture() },
+  uCloudOffset: { value: new THREE.Vector2(0, 0) },
+  uCloudAmount: { value: 0.35 },
+  uNight: { value: 0 },
+  uDusk: { value: 0 },
+  uDew: { value: 0 },
 };
 
 const WIND_GLSL = /* glsl */ `
   uniform float uTime;
   uniform float uWind;
+  uniform float uGust;
 
   vec3 windOffset(vec3 world, float h, float stiff, float phase) {
     float t = uTime;
     float gust = sin(world.x * 0.098 + t * 0.52) * 0.5 + sin(world.z * 0.121 - t * 0.35) * 0.5;
-    float wave = sin(world.x * 0.036 + world.z * 0.028 + t * 0.42);
+    // 风阵：一道波顺着风向滚过草原，uGust 由 JS 每隔十秒左右放一次
+    float front = sin(world.x * 0.052 + world.z * 0.031 - t * 1.15);
+    float wave = front * (0.20 + uGust * 2.4);
     float sway = sin(t * 1.55 + phase + world.x * 0.26 + world.z * 0.17) * 0.58
                + sin(t * 2.65 + phase * 1.7) * 0.22;
     float bend = pow(clamp(h, 0.0, 1.0), 1.5) * stiff;
     return vec3(
       (0.78 * sway + 0.62 * gust + 0.35 * wave) * 0.2 * bend * uWind,
       0.0,
-      (0.54 * sway - 0.46 * gust + 0.22 * wave) * 0.2 * bend * uWind
+      (0.54 * sway - 0.46 * gust + 0.22 * wave * 0.6) * 0.2 * bend * uWind
     );
   }
 `;
@@ -1063,6 +1261,20 @@ const LIGHT_GLSL = /* glsl */ `
   uniform vec3 uSkyColor;
   uniform vec3 uFogColor;
   uniform float uFogDensity;
+  uniform sampler2D uCloudMap;
+  uniform vec2 uCloudOffset;
+  uniform float uCloudAmount;
+  uniform float uNight;
+  uniform float uDusk;
+  uniform float uDew;
+  uniform float uTime;
+  uniform float uGust;
+
+  /* 云影：取样一张滚动的软噪声，云过去的时候这片草就暗一下 */
+  float cloudShade(vec2 xz) {
+    float cs = texture2D(uCloudMap, xz * 0.0055 + uCloudOffset).r;
+    return mix(1.0, mix(0.50, 1.03, smoothstep(0.28, 0.74, cs)), uCloudAmount);
+  }
 `;
 
 const grassVertex = /* glsl */ `
@@ -1115,17 +1327,42 @@ const grassFragment = /* glsl */ `
     vec3 v = normalize(cameraPosition - vWorld);
 
     float sh = shadowFactor(vShadowCoord, n);
+    float cs = cloudShade(vWorld.xz);
     float ao = mix(0.54, 1.0, pow(vH, 0.62));
 
     float ndl = 0.30 + 0.70 * abs(dot(n, uSunDir));
-    vec3 sun = uSunColor * ndl * 1.52 * uSunI * sh;
+    vec3 sun = uSunColor * ndl * 1.52 * uSunI * sh * cs;
     vec3 amb = uSkyColor * 0.62 + vec3(0.006, 0.011, 0.018);
     vec3 col = vColor * tex.rgb * (sun + amb) * ao;
 
-    float back = pow(max(dot(v, uSunDir), 0.0), 2.2);
-    col += vColor * tex.rgb * uSunColor * back * (0.18 + 0.82 * vH) * 0.7 * uSunI * sh;
+    float back = pow(max(-dot(v, uSunDir), 0.0), 2.2);
+    col += vColor * tex.rgb * uSunColor * back * (0.18 + 0.82 * vH) * 0.95 * uSunI * sh * cs;
+
+    // 黄昏逆光：太阳贴在草尖后面时，叶片边缘透出橙红的边光
+    float rim = pow(max(-dot(v, uSunDir), 0.0), 3.6);
+    col += vColor * tex.rgb * uSunColor * rim * pow(vH, 0.65) * uDusk * 2.15 * uSunI * sh * cs;
+
+    // 晨露：叶尖上零星的闪点，只在近处、只在这个时辰
+    if (uDew > 0.01) {
+      vec3 hv = normalize(uSunDir + v);
+      float spec = pow(max(dot(n, hv), 0.0), 160.0);
+      float gate = step(0.70, fract(sin(dot(floor(vWorld.xz * 11.0), vec2(41.3, 289.1))) * 43758.5));
+      col += uSunColor * spec * gate * uDew * 2.6 * (1.0 - smoothstep(6.0, 24.0, dist)) * sh;
+    }
+
+    // 叶片高光：顺着太阳方向看过去，嫩叶会有一层细亮的反光
+    vec3 hv = normalize(uSunDir + v);
+    float sheen = pow(max(dot(n, hv), 0.0), 24.0);
+    col += uSunColor * sheen * 0.34 * uSunI * sh * cs * (0.30 + 0.70 * vH);
+
+    // 风阵推过来时，草尖被抹亮一层，像浪一样滚过草原
+    float gustFront = sin(vWorld.x * 0.052 + vWorld.z * 0.031 - uTime * 1.15);
+    col *= 1.0 + gustFront * uGust * 0.13 * clamp(vH, 0.0, 1.0);
 
     col *= mix(vec3(0.93, 0.94, 0.92), vec3(1.16, 1.05, 0.80), clamp(vH, 0.0, 1.0));
+
+    // 夜里草是蓝银色的，不是一团黑
+    col = mix(col, col * vec3(0.60, 0.72, 1.14) + vec3(0.004, 0.008, 0.018), uNight * 0.55);
 
     float fogF = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
     col = mix(col, uFogColor, fogF);
@@ -1185,12 +1422,27 @@ const flowerFragment = /* glsl */ `
     float sh = shadowFactor(vShadowCoord, n);
 
     float ndl = 0.62 + 0.38 * abs(dot(n, uSunDir));
-    vec3 sun = uSunColor * ndl * 1.16 * uSunI * sh;
+    float cs = cloudShade(vWorld.xz);
+    vec3 sun = uSunColor * ndl * 1.16 * uSunI * sh * cs;
     vec3 amb = uSkyColor * 0.85 + vec3(0.008, 0.014, 0.024);
     vec3 col = vColor * tex.rgb * (sun + amb);
 
-    float back = pow(max(dot(v, uSunDir), 0.0), 2.0);
-    col += vColor * tex.rgb * uSunColor * back * 0.45 * uSunI * sh;
+    float back = pow(max(-dot(v, uSunDir), 0.0), 2.0);
+    col += vColor * tex.rgb * uSunColor * back * 0.45 * uSunI * sh * cs;
+
+    // 花瓣在黄昏也会被点亮一层暖边
+    float rim = pow(max(-dot(v, uSunDir), 0.0), 4.5);
+    col += vColor * tex.rgb * uSunColor * rim * uDusk * 0.9 * uSunI * sh * cs;
+
+    // 花瓣的半透光：太阳在花背后时，整朵花都亮起来
+    float glow = pow(max(-dot(v, uSunDir), 0.0), 1.5) * 0.16;
+    col += vColor * tex.rgb * uSunColor * glow * uSunI * sh * cs;
+
+    // 风阵经过时花头一起亮一下
+    float gustFront = sin(vWorld.x * 0.052 + vWorld.z * 0.031 - uTime * 1.15);
+    col *= 1.0 + gustFront * uGust * 0.10;
+
+    col = mix(col, col * vec3(0.62, 0.74, 1.12) + vec3(0.004, 0.008, 0.016), uNight * 0.6);
 
     float fogF = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
     col = mix(col, uFogColor, fogF);
@@ -1327,6 +1579,8 @@ const stemGeoBase = makeStemGeometry();
 const headGeoBase = makeFlowerHeadGeometry();
 const seedHeadGeoBase = makeGrassCardGeometry(2, 3);
 const cloverGeoBase = makeGrassCardGeometry(2, 2);
+const petalGeoBase = new THREE.PlaneGeometry(1, 1);
+petalGeoBase.rotateX(-Math.PI / 2);
 
 const chunks = new Map();
 const dummy = new THREE.Object3D();
@@ -1352,8 +1606,17 @@ function buildChunk(cx, cz, ring) {
   const baseX = cx * CHUNK;
   const baseZ = cz * CHUNK;
 
+  // 这个区块压到花海多少：中间最满，边上渐薄
+  const seaK = Math.max(
+    flowerSeaFactor(baseX + CHUNK * 0.5, baseZ + CHUNK * 0.5),
+    flowerSeaFactor(baseX + 3, baseZ + 3),
+    flowerSeaFactor(baseX + CHUNK - 3, baseZ + 3),
+    flowerSeaFactor(baseX + 3, baseZ + CHUNK - 3),
+    flowerSeaFactor(baseX + CHUNK - 3, baseZ + CHUNK - 3)
+  );
+
   const tuftCount = ringCount(ring, [5000, 4300, 3200, 1800]);
-  const flowerCount = ringCount(ring, [1100, 980, 770, 450]);
+  const flowerCount = ringCount(ring, [1100, 980, 770, 450]) + Math.round(seaK * 3000);
   const seedCount = ringCount(ring, [280, 250, 190, 110]);
   const cloverCount = ringCount(ring, [830, 750, 590, 350]);
 
@@ -1383,7 +1646,10 @@ function buildChunk(cx, cz, ring) {
     dummy.position.set(x, y, z);
     dummy.rotation.set((rand() - 0.5) * 0.16, rand() * TAU, (rand() - 0.5) * 0.16);
     const width = 0.56 + rand() * 0.36;
-    const tall = (0.38 + rand() * 0.30) * (0.84 + vitality * 0.42) * grazeFactor(x, z) * farmMowFactor(x, z);
+    const sea = flowerSeaFactor(x, z);
+    // 花海里的草被花盖住大半，留短一点，花才立得出来
+    const tall = (0.38 + rand() * 0.30) * (0.84 + vitality * 0.42)
+      * grazeFactor(x, z) * farmMowFactor(x, z) * (1 - sea * 0.42);
     dummy.scale.set(width, tall, width);
     dummy.updateMatrix();
     grassMesh.setMatrixAt(i, dummy.matrix);
@@ -1392,6 +1658,7 @@ function buildChunk(cx, cz, ring) {
     tmpColor.setHex(c).offsetHSL((rand() - 0.5) * 0.02, (rand() - 0.5) * 0.05, (rand() - 0.5) * 0.05);
     if (rand() < 0.12) tmpColor.setHex(0xd7cb90);
     if (vitality > 0.55) tmpColor.offsetHSL(0.012, 0.02, 0.016);
+    if (sea > 0.05) tmpColor.offsetHSL(0.012, 0.05, -0.03);
     grassMesh.setColorAt(i, tmpColor);
 
     phases[i] = rand() * TAU;
@@ -1500,9 +1767,12 @@ function buildChunk(cx, cz, ring) {
 
     const boost = meadowBoost(x, z);
     const keep = 0.42 + boost * 0.58;
+    let sea = flowerSeaFactor(x, z);
     const inYard = Math.abs(x - FARM.x) < FARM.halfX - 0.6 && Math.abs(z - FARM.z) < FARM.halfZ - 0.6;
     const blocked = pathDistance(x, z) < 1.25 || insideFarmWork(x, z, 0.25) || (inYard && rand() < 0.6);
-    if (blocked || rand() > keep) {
+    // 花海里几乎不留空：能开的地方都开满
+    const keepAll = keep + sea * (1.02 - keep);
+    if (blocked || rand() > keepAll) {
       dummy.position.set(x, -999, z);
       dummy.scale.setScalar(0.0001);
       dummy.updateMatrix();
@@ -1513,25 +1783,40 @@ function buildChunk(cx, cz, ring) {
       continue;
     }
 
-    const drift = fbm(x * 0.016 + 21, z * 0.016 - 5, 3) + (rand() - 0.5) * 0.06;
-    let kind = 0;
-    if (drift < 0.36) kind = 0;
-    else if (drift < 0.50) kind = 1;
-    else if (drift < 0.60) kind = 2;
-    else if (drift < 0.70) kind = 3;
-    else if (drift < 0.82) kind = 4;
-    else kind = 5;
+    let kind;
+    if (sea > 0.12) {
+      // 花海：一大片一大片地同色，边缘才掺别的花
+      const zone = fbm(x * 0.028 + 71.7, z * 0.028 - 23.4, 3);
+      if (zone < 0.40) kind = 2;        // 粉色波斯菊
+      else if (zone < 0.55) kind = 3;   // 白色碎花
+      else if (zone < 0.63) kind = 5;   // 红罂粟
+      else if (zone < 0.72) kind = 4;   // 蓝色勿忘我
+      else if (zone < 0.86) kind = 1;   // 黄色毛茛
+      else kind = 0;                    // 白雏菊
+      const mixRate = 0.07 + (1 - sea) * 0.22;
+      if (rand() < mixRate) kind = Math.floor(rand() * 6);
+    } else {
+      const drift = fbm(x * 0.016 + 21, z * 0.016 - 5, 3) + (rand() - 0.5) * 0.06;
+      if (drift < 0.36) kind = 0;
+      else if (drift < 0.50) kind = 1;
+      else if (drift < 0.60) kind = 2;
+      else if (drift < 0.70) kind = 3;
+      else if (drift < 0.82) kind = 4;
+      else kind = 5;
+    }
 
     const cluster = fbm(x * 0.035 + 31, z * 0.035 - 12, 3);
     if (cluster < 0.36 && rand() < 0.45) {
       x = baseX + rand() * CHUNK;
       z = baseZ + rand() * CHUNK;
       y = heightAt(x, z);
+      sea = flowerSeaFactor(x, z);
     }
 
     const tall = rand() < 0.12;
-    const stemH = tall ? 0.52 + rand() * 0.22 : 0.26 + rand() * 0.15;
-    const headSize = (kind === 3 || kind === 4 || kind === 5 ? 0.17 : tall ? 0.165 : 0.12) + rand() * 0.04;
+    const stemH = (tall ? 0.52 + rand() * 0.22 : 0.26 + rand() * 0.15) * (1 + sea * 0.20);
+    const headSize = ((kind === 3 || kind === 4 || kind === 5 ? 0.17 : tall ? 0.165 : 0.12) + rand() * 0.04)
+      * (1 + sea * 0.24);
     const phase = rand() * TAU;
 
     dummy.position.set(x, y, z);
@@ -1583,6 +1868,35 @@ function buildChunk(cx, cz, ring) {
     mesh.computeBoundingSphere();
     mesh.frustumCulled = false;
     group.add(mesh);
+  }
+
+  /* 落花：被风吹下来的花瓣，铺在花根之间，近看才有的一层细节 */
+  if (seaK > 0.08) {
+    const petalCount = Math.round(seaK * 900);
+    const petalGeo = petalGeoBase.clone();
+    const petalMesh = new THREE.InstancedMesh(petalGeo, flowerMaterials[2], petalCount);
+    const petalPhases = new Float32Array(petalCount);
+    const petalStiffs = new Float32Array(petalCount);
+    const tints = [0xf3bcca, 0xfff8f4, 0xf6d268, 0xd8583c, 0xb8ccef, 0xeeabc0];
+    for (let i = 0; i < petalCount; i++) {
+      const x = baseX + rand() * CHUNK;
+      const z = baseZ + rand() * CHUNK;
+      const y = heightAt(x, z);
+      const inSea = flowerSeaFactor(x, z) > 0.14;
+      dummy.position.set(x, inSea ? y + 0.012 : -999, z);
+      dummy.rotation.set((rand() - 0.5) * 0.16, rand() * TAU, (rand() - 0.5) * 0.16);
+      dummy.scale.setScalar((0.055 + rand() * 0.075) * (inSea ? 1 : 0.0001));
+      dummy.updateMatrix();
+      petalMesh.setMatrixAt(i, dummy.matrix);
+      petalMesh.setColorAt(i, tmpColor.setHex(tints[Math.floor(rand() * tints.length)]));
+      petalPhases[i] = rand() * TAU;
+      petalStiffs[i] = 0.04;
+    }
+    petalGeo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(petalPhases, 1));
+    petalGeo.setAttribute('aStiff', new THREE.InstancedBufferAttribute(petalStiffs, 1));
+    petalMesh.computeBoundingSphere();
+    petalMesh.frustumCulled = false;
+    group.add(petalMesh);
   }
 
   return { group, cx, cz };
@@ -1688,6 +2002,12 @@ const butterflies = [];
       spots.push([m.x + (rand() - 0.5) * m.r * 1.6, m.z + (rand() - 0.5) * m.r * 1.6]);
     }
   }
+  // 花海是蝴蝶最密的地方
+  for (let i = 0; i < 16; i++) {
+    const a = rand() * TAU;
+    const r = Math.sqrt(rand()) * FLOWER_SEA.r * 0.92;
+    spots.push([FLOWER_SEA.x + Math.cos(a) * r, FLOWER_SEA.z + Math.sin(a) * r]);
+  }
   const colors = [0xf3ead0, 0xf0dfa8, 0xefd3d8, 0xe4e0f0, 0xf3d9bc];
   for (let i = 0; i < spots.length; i++) {
     const mat = new THREE.SpriteMaterial({
@@ -1719,8 +2039,15 @@ const bees = [];
 {
   const rand = mulberry32(991);
   const tex = makeBeeTexture();
-  for (let i = 0; i < 16; i++) {
-    const m = MEADOWS[Math.floor(rand() * MEADOWS.length)];
+  for (let i = 0; i < 30; i++) {
+    // 三分之一留在花海，其余分散在各个小花丛
+    const m = i % 3 === 0
+      ? {
+          x: FLOWER_SEA.x + (rand() - 0.5) * FLOWER_SEA.r * 1.5,
+          z: FLOWER_SEA.z + (rand() - 0.5) * FLOWER_SEA.r * 1.5,
+          r: 1.4,
+        }
+      : MEADOWS[Math.floor(rand() * MEADOWS.length)];
     const mat = new THREE.SpriteMaterial({
       map: tex,
       transparent: true,
@@ -1778,28 +2105,46 @@ const dandelions = new THREE.Points(dandelionGeo, dandelionMat);
 dandelions.frustumCulled = false;
 scene.add(dandelions);
 
-/* ---------------- 萤火虫：天黑了才出来 ---------------- */
+/* ---------------- 萤火虫：天黑了才出来，成群结队地亮 ---------------- */
 const FIREFLY_COUNT = 1200;
+const FIREFLY_CLUSTERS = 7;
+const fireflyCenters = [
+  { x: MEADOWS[0].x, z: MEADOWS[0].z, r: 3.4 },
+  { x: MEADOWS[1].x + 2, z: MEADOWS[1].z - 2, r: 2.6 },
+  { x: MEADOWS[2].x - 3, z: MEADOWS[2].z + 2, r: 2.8 },
+  { x: MEADOWS[7].x + 1, z: MEADOWS[7].z - 3, r: 3.2 },
+  { x: FARM.x + FARM.halfX + 3.5, z: FARM.z - FARM.halfZ - 2.5, r: 2.4 },
+  { x: PATH_POINTS[3][0] + 2, z: PATH_POINTS[3][1] + 1.5, r: 2.2 },
+  { x: FLOWER_SEA.x, z: FLOWER_SEA.z, r: 4.6 },
+];
 const fireflyGeo = new THREE.BufferGeometry();
 {
   const rnd = mulberry32(8128);
   const pos = new Float32Array(FIREFLY_COUNT * 3);
   const phase = new Float32Array(FIREFLY_COUNT);
   const size = new Float32Array(FIREFLY_COUNT);
+  const cluster = new Float32Array(FIREFLY_COUNT);
+  const kick = new Float32Array(FIREFLY_COUNT);
   for (let i = 0; i < FIREFLY_COUNT; i++) {
-    const r = Math.sqrt(rnd()) * 40;
+    const ci = i % FIREFLY_CLUSTERS;
+    const c = fireflyCenters[ci];
+    const r = Math.sqrt(rnd()) * c.r * 2.1;
     const a = rnd() * TAU;
-    const x = Math.cos(a) * r;
-    const z = 8 + Math.sin(a) * r;
+    const x = c.x + Math.cos(a) * r;
+    const z = c.z + Math.sin(a) * r;
     pos[i * 3] = x;
-    pos[i * 3 + 1] = heightAt(x, z) + 0.4 + rnd() * 2.0;
+    pos[i * 3 + 1] = heightAt(x, z) + 0.35 + rnd() * 1.9;
     pos[i * 3 + 2] = z;
     phase[i] = rnd();
     size[i] = 1.0 + rnd() * 1.1;
+    cluster[i] = ci;
+    kick[i] = rnd() * TAU;
   }
   fireflyGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   fireflyGeo.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
   fireflyGeo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+  fireflyGeo.setAttribute('aCluster', new THREE.BufferAttribute(cluster, 1));
+  fireflyGeo.setAttribute('aKick', new THREE.BufferAttribute(kick, 1));
 }
 
 const fireflyMat = new THREE.ShaderMaterial({
@@ -1816,20 +2161,23 @@ const fireflyMat = new THREE.ShaderMaterial({
     uniform float uPixelRatio;
     attribute float aPhase;
     attribute float aSize;
+    attribute float aCluster;
+    attribute float aKick;
     varying float vGlow;
     varying vec3 vHue;
 
     void main() {
       vec3 p = position;
-      p.x += sin(uTime * 0.29 + aPhase * 21.0) * 0.75;
-      p.z += cos(uTime * 0.25 + aPhase * 17.0) * 0.75;
+      p.x += sin(uTime * 0.29 + aPhase * 21.0) * 0.55;
+      p.z += cos(uTime * 0.25 + aPhase * 17.0) * 0.55;
       p.y += sin(uTime * 0.43 + aPhase * 31.0) * 0.24;
 
       vec4 mv = modelViewMatrix * vec4(p, 1.0);
       gl_Position = projectionMatrix * mv;
 
-      float pulse = 0.5 + 0.5 * sin(uTime * (1.0 + aPhase * 0.85) + aPhase * 40.0);
-      vGlow = 0.2 + 0.8 * pow(pulse, 2.6);
+      // 同一窝的萤火虫周期一致，只差一点相位：看起来像一片在呼吸
+      float pulse = 0.5 + 0.5 * sin(uTime * (1.2 + aCluster * 0.19) + aCluster * 2.3 + aKick * 0.55);
+      vGlow = 0.12 + 0.88 * pow(pulse, 2.4);
       vHue = mix(vec3(0.56, 1.0, 0.32), vec3(1.0, 0.92, 0.52), fract(aPhase * 7.3));
       gl_PointSize = aSize * uPixelRatio * 62.0 / max(-mv.z, 0.5);
     }
@@ -1864,33 +2212,195 @@ function updateFireflies(t, dt) {
   const camX = camera.position.x;
   const camZ = camera.position.z;
 
+  // 窝离镜头太远就慢慢挪过来：走到哪儿都有几群萤火虫
+  for (const c of fireflyCenters) {
+    if (c.gy === undefined) c.gy = heightAt(c.x, c.z);
+    const d = Math.hypot(c.x - camX, c.z - camZ);
+    if (d > 44) {
+      const k = Math.min(1, ((d - 44) / d) * dt * 0.9);
+      c.x += (camX - c.x) * k;
+      c.z += (camZ - c.z) * k;
+      c.gy = heightAt(c.x, c.z);
+    }
+  }
+
   if (!fireflyActive) {
     fireflyActive = true;
     for (let i = 0; i < FIREFLY_COUNT; i++) {
       const ix = i * 3;
-      const r = Math.sqrt(Math.random()) * 38;
+      const c = fireflyCenters[i % FIREFLY_CLUSTERS];
+      const r = Math.sqrt(Math.random()) * c.r * 2.1;
       const a = Math.random() * TAU;
-      arr[ix] = camX + Math.cos(a) * r;
-      arr[ix + 2] = camZ + Math.sin(a) * r;
-      arr[ix + 1] = heightAt(arr[ix], arr[ix + 2]) + 0.35 + Math.random() * 2.0;
+      arr[ix] = c.x + Math.cos(a) * r;
+      arr[ix + 2] = c.z + Math.sin(a) * r;
+      arr[ix + 1] = c.gy + 0.35 + Math.random() * 1.9;
     }
     fireflyGeo.attributes.position.needsUpdate = true;
     return;
   }
 
+  const pull = Math.min(1, dt * 0.5);
   for (let i = 0; i < FIREFLY_COUNT; i++) {
     const ix = i * 3;
-    arr[ix] += (0.055 + Math.sin(t * 0.21 + i) * 0.05) * dt;
-    arr[ix + 2] += Math.cos(t * 0.17 + i * 1.7) * 0.05 * dt;
-
-    let wrapped = false;
-    if (arr[ix] - camX > 40) { arr[ix] -= 80; wrapped = true; }
-    else if (arr[ix] - camX < -40) { arr[ix] += 80; wrapped = true; }
-    if (arr[ix + 2] - camZ > 40) { arr[ix + 2] -= 80; wrapped = true; }
-    else if (arr[ix + 2] - camZ < -40) { arr[ix + 2] += 80; wrapped = true; }
-    if (wrapped) arr[ix + 1] = heightAt(arr[ix], arr[ix + 2]) + 0.35 + Math.random() * 2.0;
+    const c = fireflyCenters[i % FIREFLY_CLUSTERS];
+    arr[ix] += (0.055 + Math.sin(t * 0.21 + i) * 0.05) * dt + (c.x - arr[ix]) * pull;
+    arr[ix + 2] += Math.cos(t * 0.17 + i * 1.7) * 0.05 * dt + (c.z - arr[ix + 2]) * pull;
+    arr[ix + 1] += (c.gy + 1.1 - arr[ix + 1]) * Math.min(1, dt * 0.6);
   }
   fireflyGeo.attributes.position.needsUpdate = true;
+}
+
+/* ---------------- 贴地薄雾：只在清晨铺在草上 ---------------- */
+const mistUniforms = {
+  uTime: sharedUniforms.uTime,
+  uOpacity: { value: 0 },
+  uColor: { value: new THREE.Color(0xc9d8dd) },
+  uWarm: { value: new THREE.Color(0xffd7ab) },
+  uSunDir: sharedUniforms.uSunDir,
+  uSunColor: sharedUniforms.uSunColor,
+};
+
+const mistMat = new THREE.ShaderMaterial({
+  uniforms: mistUniforms,
+  transparent: true,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    varying vec3 vWorld;
+    void main() {
+      vUv = uv;
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorld = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform float uTime;
+    uniform float uOpacity;
+    uniform vec3 uColor;
+    uniform vec3 uWarm;
+    uniform vec3 uSunDir;
+    uniform vec3 uSunColor;
+    varying vec2 vUv;
+    varying vec3 vWorld;
+
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+                 mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
+    float fbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      for (int i = 0; i < 4; i++) {
+        v += a * noise(p);
+        p = p * 2.07 + vec2(11.3, 7.7);
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    void main() {
+      vec2 p = vWorld.xz * 0.055;
+      float n = fbm(p + vec2(uTime * 0.006, uTime * 0.004)) * 0.65
+              + fbm(p * 2.6 - vec2(uTime * 0.009, 0.0)) * 0.35;
+      float r = length(vUv - 0.5) * 2.0;
+      float edge = smoothstep(1.0, 0.22, r);
+      float hole = smoothstep(0.015, 0.16, r);   // 贴脸那一圈不要糊住镜头
+      float a = smoothstep(0.36, 0.72, n) * edge * hole * uOpacity;
+      if (a < 0.004) discard;
+
+      vec2 toCam = normalize(cameraPosition.xz - vWorld.xz + vec2(0.0001));
+      float warm = pow(max(dot(normalize(uSunDir.xz + vec2(0.0001)), toCam), 0.0), 2.0);
+      vec3 col = mix(uColor, uWarm, warm * 0.85);
+      col = mix(col, col * 0.9 + uSunColor * 0.10, 0.45);
+      gl_FragColor = vec4(col, a);
+    }
+  `,
+});
+
+const mistLayers = [];
+for (let i = 0; i < 3; i++) {
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(150, 150), mistMat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 2;
+  mesh.visible = false;
+  scene.add(mesh);
+  mistLayers.push(mesh);
+}
+
+function updateMist(t) {
+  const op = mistUniforms.uOpacity.value;
+  const on = op > 0.005;
+  for (let i = 0; i < mistLayers.length; i++) {
+    const mesh = mistLayers[i];
+    mesh.visible = on;
+    if (!on) continue;
+    const gx = camera.position.x;
+    const gz = camera.position.z;
+    mesh.position.set(gx, heightAt(gx, gz) + 0.45 + i * 0.8, gz);
+    mesh.rotation.z = t * 0.006 * (i % 2 ? -1 : 1);
+  }
+}
+
+/* ---------------- 蝙蝠：接蝴蝶的夜班 ---------------- */
+function makeBatTexture() {
+  const S = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, S, S);
+  ctx.fillStyle = '#15111b';
+  ctx.beginPath();
+  ctx.ellipse(S / 2, S * 0.52, 5.5, 13, 0, 0, TAU);
+  ctx.fill();
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(S / 2, S * 0.48);
+    ctx.quadraticCurveTo(S / 2 + s * 20, S * 0.33, S / 2 + s * 52, S * 0.5);
+    ctx.quadraticCurveTo(S / 2 + s * 33, S * 0.5, S / 2 + s * 28, S * 0.64);
+    ctx.quadraticCurveTo(S / 2 + s * 17, S * 0.54, S / 2, S * 0.56);
+    ctx.closePath();
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const bats = [];
+{
+  const rand = mulberry32(313);
+  const tex = makeBatTexture();
+  for (let i = 0; i < 7; i++) {
+    const mat = new THREE.SpriteMaterial({
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+      opacity: 0,
+    });
+    const sprite = new THREE.Sprite(mat);
+    const scale = 0.26 + rand() * 0.12;
+    sprite.scale.setScalar(scale);
+    sprite.visible = false;
+    scene.add(sprite);
+    bats.push({
+      sprite,
+      cx: FARM.x + (rand() - 0.5) * 20,
+      cz: FARM.z + (rand() - 0.5) * 20,
+      radius: 5 + rand() * 9,
+      height: 7 + rand() * 5,
+      speed: 0.32 + rand() * 0.32,
+      flap: 9 + rand() * 6,
+      ph: rand() * TAU,
+      scale,
+    });
+  }
 }
 
 /* =========================================================
@@ -2312,7 +2822,9 @@ function updateWater() {
 
 const CLOUD_TOKEN_KEY = 'iw.cloud.token';
 const CLOUD_NAME_KEY = 'iw.cloud.name';
-const CLOUD_API = location.protocol === 'file:' ? '' : new URL('api/index.php', location.href).href;
+const CLOUD_API = location.protocol === 'file:'
+  ? 'http://121.199.0.224/ideal-world/api/index.php'
+  : new URL('api/index.php', location.href).href;
 
 const saveStateEl = document.getElementById('save-state');
 const saveFormEl = document.getElementById('save-form');
@@ -2323,6 +2835,10 @@ const saveNameEl = document.getElementById('save-name');
 const saveMetaEl = document.getElementById('save-meta');
 const saveHintEl = document.getElementById('save-hint');
 const saveImportEl = document.getElementById('save-import');
+const saveOpenLoginEl = document.getElementById('save-open-login');
+if (saveOpenLoginEl) {
+  saveOpenLoginEl.href = location.protocol === 'file:' ? '登录.html' : './login.html';
+}
 
 let cloudToken = '';
 let cloudName = '';
@@ -2630,6 +3146,7 @@ async function cloudBoot() {
         if (saveMetaEl) saveMetaEl.textContent = `上次同步：${cloudFormatTime(cloudUpdatedAt)}`;
         cloudSetState(`已连接云端 · ${cloudName}`);
       } else {
+        if (saveMetaEl) saveMetaEl.textContent = '云端还没有存档';
         cloudSetState(`已登录 ${cloudName} · 云端还没有存档`);
       }
     }
@@ -3737,6 +4254,7 @@ function updateCartAudio(speed, dt) {
    ========================================================= */
 
 let lastClockText = '';
+let cloudBoost = 1;   // 调试用：?cloud=3 把云影放大，方便确认有没有生效
 
 function updateClock(h) {
   const text = `${formatClock(h)} · ${phaseName(h)}`;
@@ -3759,6 +4277,7 @@ function applyTime() {
   skyUniforms.uCloud.value.copy(s.cloud);
   skyUniforms.uSunColor.value.copy(s.sun);
   skyUniforms.uNight.value = s.night;
+  skyUniforms.uStars.value = clamp(smoothstep(-2.5, -9.0, s.elev), 0, 1);
   skyUniforms.uDusk.value = s.dusk;
   skyUniforms.uCover.value = clamp(s.cover + 0.1, 0, 0.82);
 
@@ -3781,9 +4300,35 @@ function applyTime() {
   sharedUniforms.uFogColor.value.copy(s.fog);
   sharedUniforms.uFogDensity.value = s.fogD;
 
+  // 时刻驱动的三个"天气参数"：黄昏逆光、清晨露水、云影浓度
+  const hh = s.hour;
+  sharedUniforms.uNight.value = clamp(smoothstep(-1.0, -9.0, s.elev), 0, 1);
+  sharedUniforms.uDusk.value = s.dusk;
+  sharedUniforms.uDew.value = clamp(
+    smoothstep(4.6, 6.5, hh) * smoothstep(11.2, 8.4, hh), 0, 1
+  );
+  sharedUniforms.uCloudAmount.value = clamp((0.34 + s.cover * 0.95) * (1 - s.night * 0.94) * cloudBoost, 0, 1);
+
+  // 薄雾：天亮前后铺一层，太阳升高就散
+  mistUniforms.uOpacity.value = clamp(
+    smoothstep(4.2, 5.7, hh) * smoothstep(9.6, 7.3, hh) * 0.78, 0, 1
+  );
+
+  // 花粉与蒲公英：黄昏染成金色、变大变多
+  const duskK = s.dusk;
+  pollenMat.color.setRGB(1.0, 0.97, 0.86).lerp(tmpColor.setRGB(1.0, 0.74, 0.40), duskK * 0.9);
+  pollenMat.size = 0.1 + duskK * 0.04;
+  dandelionMat.color.setRGB(1.0, 0.98, 0.94).lerp(tmpColor.setRGB(1.0, 0.80, 0.52), duskK * 0.85);
+
   fireflyMat.uniforms.uOpacity.value = smoothstep(4, -5, s.elev) * 0.95;
-  pollenMat.opacity = 0.55 * (1 - s.night * 0.85);
-  dandelionMat.opacity = 0.6 * (1 - s.night * 0.9);
+  pollenMat.opacity = (0.52 + duskK * 0.30) * (1 - s.night * 0.88);
+  dandelionMat.opacity = (0.58 + duskK * 0.22) * (1 - s.night * 0.9);
+
+  if (postfx) {
+    postfx.grade.uniforms.uHeat.value = clamp(
+      (1 - s.night) * smoothstep(9.8, 12.2, hh) * smoothstep(16.4, 13.6, hh), 0, 1
+    );
+  }
 
   if (farm && farm.setNight) farm.setNight(s.night);
   if (music) music.setNight(s.night);
@@ -3815,11 +4360,27 @@ function updateTime(dt) {
 
 let lastPlaceName = '';
 
+/* 风阵：隔一阵子放一次，草会像浪一样从远处推过来 */
+let gustTimer = 4;
+let gustAmp = 0;
+
 function updateWorld(t, dt) {
   skyUniforms.uTime.value = t;
   skyMesh.position.copy(camera.position);
   sharedUniforms.uTime.value = t;
-  sharedUniforms.uWind.value = 0.82 + Math.sin(t * 0.12) * 0.22 + Math.sin(t * 0.35) * 0.08;
+
+  gustTimer -= dt;
+  if (gustTimer <= 0) {
+    gustTimer = 8 + Math.random() * 9;
+    gustAmp = 0.55 + Math.random() * 0.65;
+  }
+  gustAmp *= Math.exp(-dt * 0.5);
+  sharedUniforms.uGust.value = gustAmp;
+  sharedUniforms.uWind.value = 0.66 + Math.sin(t * 0.12) * 0.14 + gustAmp * 0.55;
+
+  // 云影跟着风走
+  sharedUniforms.uCloudOffset.value.x += dt * 0.0030 * (0.7 + gustAmp);
+  sharedUniforms.uCloudOffset.value.y += dt * 0.0015 * (0.7 + gustAmp);
 
   // 阴影矩阵
   const shadowMap = sunLight.shadow.map;
@@ -3872,7 +4433,8 @@ function updateWorld(t, dt) {
   }
   pollenGeo.attributes.position.needsUpdate = true;
 
-  // 蝴蝶
+  // 蝴蝶：白天才出来，清晨要等露水干了
+  const dayF = clamp((1 - timeState.night) * smoothstep(6.2, 8.6, timeState.hour), 0, 1);
   for (const b of butterflies) {
     const px = b.hx + Math.sin(t * b.speed + b.ph) * 5.2;
     const pz = b.hz + Math.sin(t * b.speed * 0.74 + b.ph * 1.7) * 5.2;
@@ -3881,10 +4443,12 @@ function updateWorld(t, dt) {
     const flap = 0.5 + Math.abs(Math.sin(t * b.flap + b.ph)) * 0.6;
     b.sprite.scale.set(b.baseScale * flap, b.baseScale, 1);
     b.sprite.material.rotation = Math.sin(t * 0.6 + b.ph) * 0.25;
-    b.sprite.material.opacity = 0.95 * (1 - timeState.night * 0.95);
+    b.sprite.material.opacity = 0.95 * dayF;
+    b.sprite.visible = dayF > 0.03;
   }
 
-  // 蜜蜂
+  // 蜜蜂：只在暖和的白天出工
+  const beeF = clamp(smoothstep(2, 9, timeState.elev) * smoothstep(20.4, 18.0, timeState.hour), 0, 1);
   for (const b of bees) {
     const a = t * b.speed + b.ph;
     const px = b.hx + Math.cos(a) * b.radius;
@@ -3893,8 +4457,25 @@ function updateWorld(t, dt) {
     b.sprite.position.set(px, py, pz);
     const s = b.baseScale * (0.85 + Math.abs(Math.sin(t * 24 + b.ph)) * 0.3);
     b.sprite.scale.setScalar(s);
-    b.sprite.material.opacity = 0.95 * (1 - timeState.night * 0.95);
+    b.sprite.material.opacity = 0.95 * beeF;
+    b.sprite.visible = beeF > 0.03;
   }
+
+  // 蝙蝠：接蝴蝶的夜班
+  const batOn = smoothstep(0.30, 0.72, timeState.night);
+  for (const b of bats) {
+    b.sprite.visible = batOn > 0.02;
+    if (!b.sprite.visible) continue;
+    const a = t * b.speed + b.ph;
+    const x = b.cx + Math.cos(a) * b.radius;
+    const z = b.cz + Math.sin(a * 0.9) * b.radius;
+    b.sprite.position.set(x, heightAt(x, z) + b.height + Math.sin(t * 0.7 + b.ph) * 0.5, z);
+    const flap = 0.55 + Math.abs(Math.sin(t * b.flap + b.ph)) * 0.5;
+    b.sprite.scale.set(b.scale * 1.7 * flap, b.scale, 1);
+    b.sprite.material.opacity = 0.85 * batOn;
+  }
+
+  updateMist(t);
 
   // 蒲公英种子
   const darr = dandelionGeo.attributes.position.array;
@@ -3924,12 +4505,14 @@ function updateWorld(t, dt) {
 
   // 地点名
   const inFarm = Math.abs(player.x - FARM.x) < FARM.halfX + 0.5 && Math.abs(player.z - FARM.z) < FARM.halfZ + 0.5;
-  const name = inFarm ? '草原农场' : '';
+  const inSea = flowerSeaFactor(player.x, player.z) > 0.30;
+  const name = inFarm ? '草原农场' : inSea ? '花海' : '';
   if (name !== lastPlaceName) {
     lastPlaceName = name;
     placeEl.textContent = name;
     placeEl.classList.toggle('on', !!name);
-    if (name) showToast('菜畦就在右手边');
+    if (name === '草原农场') showToast('菜畦就在右手边');
+    else if (name === '花海') showToast('整片坡都开满了花');
   }
 
   renderPrompt();
@@ -4093,6 +4676,8 @@ function animate(now) {
   if (events.length) cloudQueueSave();
 
   postfx.setSun(SUN_DIR, camera);
+  // 太阳落到地下以后就别再拉光柱了，否则夜里会凭空出现一道极光
+  postfx.grade.uniforms.uSunVis.value *= clamp(1 - timeState.night * 1.35, 0, 1);
   postfx.grade.uniforms.uDusk.value = timeState.dusk;
   postfx.render(dt, elapsed);
 
@@ -4171,7 +4756,6 @@ if (new URLSearchParams(location.search).has('still')) {
         log.push('EX:' + e.message);
       }
       document.title = log.join(' | ');
-      if (menuTipEl) menuTipEl.textContent = 'SELFTEST ' + log.join(' | ');
     }, 1800);
   }
 
@@ -4230,6 +4814,10 @@ if (new URLSearchParams(location.search).has('still')) {
     dandelions.visible = false;
     fireflies.visible = false;
   }
+  // 调试：分别关掉天空 / 光柱，排查夜里那道竖条纹
+  if (p.has('skyno')) skyMesh.visible = false;
+  if (p.has('norays')) postfx.grade.uniforms.uSunVis.value = 0;
+  if (p.has('cloud')) { cloudBoost = parseFloat(p.get('cloud')) || 1; applyTime(); }
   if (p.has('nograss')) {
     for (const [, chunk] of chunks) {
       chunk.group.traverse((o) => {
@@ -4238,7 +4826,8 @@ if (new URLSearchParams(location.search).has('still')) {
     }
   }
   setTimeout(() => {
-    document.title = `GRASS:fps=${window.__fps || 0}:beds=${farm.beds.length}:sel=${farm.getSelected()}:h=${timeState.hour.toFixed(1)}:err=${window.__err.length}`;
+    const err = window.__err.length ? ' :: ' + window.__err[0].slice(0, 240) : '';
+    document.title = `GRASS:fps=${window.__fps || 0}:beds=${farm.beds.length}:sel=${farm.getSelected()}:h=${timeState.hour.toFixed(1)}:err=${window.__err.length}${err}`;
   }, 3000);
 }
 
