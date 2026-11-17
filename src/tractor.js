@@ -211,7 +211,7 @@ export function createTractor(scene, { heightAt }) {
         vAge = aAge;
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         gl_Position = projectionMatrix * mv;
-        gl_PointSize = (26.0 + aAge * 60.0) * (1.0 / max(-mv.z, 1.0)) * 60.0;
+        gl_PointSize = (10.0 + aAge * 26.0) * (8.0 / max(-mv.z, 1.0));
       }
     `,
     fragmentShader: /* glsl */ `
@@ -220,7 +220,7 @@ export function createTractor(scene, { heightAt }) {
       void main() {
         if (vAge > 1.0) discard;
         vec4 t = texture2D(uMap, gl_PointCoord);
-        gl_FragColor = vec4(vec3(0.86, 0.86, 0.84), t.a * (1.0 - vAge) * 0.42);
+        gl_FragColor = vec4(vec3(0.86, 0.86, 0.84), t.a * (1.0 - vAge) * 0.3);
       }
     `,
   });
@@ -370,8 +370,8 @@ export function createTractor(scene, { heightAt }) {
   const camTarget = new THREE.Vector3();
   function placeCamera(camera, orbitYaw, camPitch, t) {
     const yaw = state.yaw + orbitYaw;
-    const dist = 6.6;
-    const height = 2.9 + camPitch * 2.4;
+    const dist = 7.4;
+    const height = 3.1 + camPitch * 2.6;
     const x = state.x + Math.sin(yaw) * dist;
     const z = state.z + Math.cos(yaw) * dist;
     const ground = heightAt(x, z);

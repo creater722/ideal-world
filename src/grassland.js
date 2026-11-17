@@ -1497,7 +1497,7 @@ function buildSnowRange() {
     h += (fbm(x * 0.0280 - 11.2, z * 0.0280 + 6.6, 3) - 0.5) * 22 * scale;
 
     // 前后两端沉到地平线以下，接缝被前面的丘陵挡住
-    h *= Math.min(1, tz / 0.07) * Math.min(1, (1 - tz) / 0.09);
+    h *= Math.min(1, tz / 0.025) * Math.min(1, (1 - tz) / 0.09);
     if (h < 0) h *= 0.3;
 
     heights[i] = h;
@@ -1518,7 +1518,8 @@ function buildSnowRange() {
     const z = pos.getZ(i);
     const ny = nrm.getY(i);
 
-    const line = 190 + (fbm(x * 0.0028 - 3.1, z * 0.0028 + 7.4, 3) - 0.5) * 130;
+    // 雪线压低：山脚也该是雪，走到跟前才不是一片灰岩
+    const line = 90 + (fbm(x * 0.0028 - 3.1, z * 0.0028 + 7.4, 3) - 0.5) * 110;
     let sn = smoothstep(line - 188, line + 176, y);
     sn *= smoothstep(0.10, 0.40, ny);                       // 陡的岩壁挂不住雪
     // 沟里存不住雪：山脊之间的深槽露出深色岩体。
@@ -1562,6 +1563,8 @@ function buildSnowRange() {
 
   const mat = new THREE.ShaderMaterial({
     uniforms: mtnUniforms,
+    // 走到山脚时是从山体正面下方仰视，单面会被背面剔除掉，整座山直接消失
+    side: THREE.DoubleSide,
     vertexShader: /* glsl */ `
       attribute float aSnow;
       attribute float aRock;
@@ -1700,6 +1703,9 @@ function buildSnowRange() {
         float foot = smoothstep(mistTop, mistTop - 345.0, vWorld.y);
         // 雪比岩石更"穿透"雾：雾天里最先看见的总是雪线
         foot *= mix(1.0, 0.72, vSnow);
+        // 这层"山脚雾"本来是当远处的空气透视用的：
+        // 人真走到山脚下就该看清岩石和雪，所以按距离淡出
+        foot *= mix(0.30, 1.0, smoothstep(500.0, 1600.0, dist));
         // 山根埋在地平线以下（baseY=-90），这一段彻底化进雾里，接缝归零
         float sink = smoothstep(58.0, -150.0, vWorld.y);
         float fogCap = mix(0.90, 1.0, sink);
@@ -4151,7 +4157,8 @@ function renderPrompt() {
 
   if (driving) {
     const kmh = Math.round(Math.abs(tractor.speed) * 3.6);
-    show('truck', `<span class="key">E</span><span>下车</span><span class="sub">W / S 油门 · A / D 转向 · ${kmh} km/h</span>`);
+    // key 必须带上速度：提示条是按 key 缓存的，key 不变就不会重绘
+    show(`truck-${kmh}`, `<span class="key">E</span><span>下车</span><span class="sub">W / S 油门 · A / D 转向 · ${kmh} km/h</span>`);
     return;
   }
 
