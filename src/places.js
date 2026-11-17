@@ -59,9 +59,12 @@ function cyl(rt, rb, h, seg, mat, x, y, z) {
 }
 
 /* ---------- 水面 ---------- */
+const RIPPLE_COUNT = 6;
+
 function makeWater(radius) {
   // 必须细分：CircleGeometry 只有中心和一圈顶点，aDepth 会在整片水面上线性插值，岸线全错
-  const geo = new THREE.PlaneGeometry(radius * 2, radius * 2, 140, 140);
+  // 一平米一格，水线才能贴着不规则岸线走，而不是切出多边形锯齿
+  const geo = new THREE.PlaneGeometry(radius * 2, radius * 2, 190, 190);
   geo.rotateX(-Math.PI / 2);
 
   const pos = geo.attributes.position;
@@ -75,6 +78,8 @@ function makeWater(radius) {
   }
   geo.setAttribute('aDepth', new THREE.BufferAttribute(depth, 1));
 
+  const ripples = Array.from({ length: RIPPLE_COUNT }, () => new THREE.Vector4(0, 0, -999, 0));
+
   const uniforms = {
     uTime: { value: 0 },
     uSkyTop: { value: new THREE.Color(0x3f7fc4) },
@@ -82,6 +87,8 @@ function makeWater(radius) {
     uSunDir: { value: new THREE.Vector3(0, 1, 0) },
     uSunColor: { value: new THREE.Color(0xfff0c8) },
     uSunI: { value: 1 },
+    uMoonDir: { value: new THREE.Vector3(0, 1, 0) },
+    uNight: { value: 0 },
     uFogColor: { value: new THREE.Color(0xe6e5c9) },
     uFogDensity: { value: 0.006 },
     uDeep: { value: new THREE.Color(0x081a24) },
@@ -89,6 +96,8 @@ function makeWater(radius) {
     uReflection: { value: null },
     uReflectMatrix: { value: new THREE.Matrix4() },
     uDusk: { value: 0 },
+    uReflValid: { value: 1 },
+    uRipples: { value: ripples },
   };
 
   const mat = new THREE.ShaderMaterial({
@@ -126,12 +135,16 @@ function makeWater(radius) {
       uniform vec3 uSunDir;
       uniform vec3 uSunColor;
       uniform float uSunI;
+      uniform vec3 uMoonDir;
+      uniform float uNight;
       uniform vec3 uFogColor;
       uniform float uFogDensity;
       uniform vec3 uDeep;
       uniform vec3 uShallow;
       uniform sampler2D uReflection;
       uniform float uDusk;
+      uniform float uReflValid;
+      uniform vec4 uRipples[6];
       varying vec2 vUv;
       varying float vDepth;
       varying vec3 vWorld;
@@ -147,91 +160,151 @@ function makeWater(radius) {
         return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
                    mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
       }
+      float fbm2(vec2 p) {
+        return noise(p) * 0.63 + noise(p * 2.11 + vec2(19.7, 8.3)) * 0.37;
+      }
 
       void main() {
         // 地面高过水面的地方不画。留一点余量，阈值太紧会在岸边切出块状缺口
-        if (vDepth < -0.22) discard;
+        if (vDepth < -0.18) discard;
 
         vec3 V = normalize(cameraPosition - vWorld);
         vec2 p = vWorld.xz;
+        float dist = length(cameraPosition - vWorld);
+        float distFade = 1.0 - smoothstep(26.0, 150.0, dist);
 
-        // 法线：两层慢波 + 一层细纹。细纹不能省，否则太阳倒影会糊成一个白饼
-        float n1 = noise(p * 0.36 + vec2(uTime * 0.035, uTime * 0.022));
-        float n2 = noise(p * 0.92 + vec2(-uTime * 0.05, uTime * 0.038));
-        float n3 = noise(p * 2.6 + vec2(uTime * 0.09, -uTime * 0.07));
-        float n4 = noise(p * 6.4 + vec2(-uTime * 0.16, uTime * 0.13));
-        vec3 N = normalize(vec3(
-          (n1 - 0.5) * 0.16 + (n2 - 0.5) * 0.09 + (n3 - 0.5) * 0.05 + (n4 - 0.5) * 0.03,
-          1.0,
-          (n2 - 0.5) * 0.16 + (n3 - 0.5) * 0.09 + (n4 - 0.5) * 0.05
-        ));
+        // 风：低频阵风，让水面一块起皱、一块像玻璃
+        vec2 wind = normalize(vec2(0.84, 0.54));
+        vec2 wq = vec2(dot(p, wind), dot(p, vec2(-wind.y, wind.x)));
+        float gust = fbm2(p * 0.028 + vec2(uTime * 0.0045, -uTime * 0.0032));
+        float rough = mix(0.42, 1.45, smoothstep(0.30, 0.80, gust));
+
+        // 四层波：两层沿风拉长的大浪 + 两层细纹
+        float n1 = noise(wq * vec2(0.26, 0.42) + vec2(uTime * 0.040, uTime * 0.018));
+        float n2 = noise(wq * vec2(0.72, 1.02) + vec2(-uTime * 0.068, uTime * 0.048));
+        float n3 = noise(wq * vec2(2.05, 2.70) + vec2(uTime * 0.15, -uTime * 0.11));
+        float n4 = noise(wq * vec2(5.30, 6.10) - vec2(uTime * 0.26, uTime * 0.20));
+
+        float sx = (n1 - 0.5) * 0.20 + (n2 - 0.5) * 0.14 + (n3 - 0.5) * 0.075 + (n4 - 0.5) * 0.038;
+        float sz = (n2 - 0.5) * 0.20 + (n3 - 0.5) * 0.14 + (n4 - 0.5) * 0.075 + (n1 - 0.5) * 0.055;
+        vec2 slope = vec2(sx, sz) * rough * 1.5;
+
+        // 鱼跃 / 水虫落水：一圈圈推开的涟漪
+        float ringGlow = 0.0;
+        for (int i = 0; i < 6; i++) {
+          vec4 rp = uRipples[i];
+          float age = uTime - rp.z;
+          if (age > 0.0 && age < 5.5) {
+            vec2 dv = p - rp.xy;
+            float d = length(dv);
+            float front = age * 0.62;
+            float w = 0.14 + age * 0.085;
+            float e = (d - front) / w;
+            float amp = exp(-e * e);
+            amp *= (1.0 - age / 5.5) * smoothstep(0.0, 0.45, age) * (rp.w > 0.0 ? rp.w : 1.0);
+            slope += (dv / max(d, 0.0001)) * amp * 0.62;
+            ringGlow += amp * 0.055;
+          }
+        }
+
+        vec3 N = normalize(vec3(-slope.x * 0.9, 1.0, -slope.y * 0.9));
 
         float ndv = clamp(dot(N, V), 0.0, 1.0);
-        float fres = pow(1.0 - ndv, 4.5);
-        // 黄昏时水面更像镜子
-        fres = mix(0.02, mix(0.88, 0.955, uDusk), fres);
+        float fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+        fres = clamp(mix(fres, 1.0, 0.14 * rough), 0.0, 0.94);
 
         vec3 R = reflect(-V, N);
-        // 掠射角反射到的是远山（暗），抬头一点才是天空（亮）
-        vec3 skyRefl = mix(uSkyHorizon, uSkyTop, clamp(R.y * 1.6 + 0.02, 0.0, 1.0));
-        vec3 ridgeRefl = mix(vec3(0.10, 0.135, 0.11), uSkyHorizon * 0.62, 0.42);
-        skyRefl = mix(ridgeRefl, skyRefl, smoothstep(-0.07, 0.13, R.y));
-        // 水映天，但要留住蓝：压红、留蓝
-        skyRefl *= vec3(0.70, 0.84, 0.96);
+
+        // 解析天空反射：反射贴图之外、以及贴图失效时都用它
+        float upR = R.y;
+        vec3 skyRefl = mix(uSkyHorizon, uSkyTop, smoothstep(-0.03, 0.52, upR));
+        float ridgeMask = smoothstep(-0.02, 0.16, upR);
+        vec3 ridgeRefl = mix(vec3(0.10, 0.135, 0.115), uSkyHorizon * 0.66, 0.45);
+        skyRefl = mix(ridgeRefl, skyRefl, ridgeMask);
+        // 太阳那一侧的地平线被烧暖，夜里换成一团月光
+        float sunAz = pow(max(dot(normalize(vec3(R.x, 0.0, R.z)), normalize(vec3(uSunDir.x, 0.0, uSunDir.z))), 0.0), 4.0);
+        skyRefl += uSunColor * sunAz * (1.0 - ridgeMask) * (0.10 + uDusk * 0.60);
+        skyRefl += uSunColor * pow(max(dot(R, uSunDir), 0.0), 18.0) * (0.16 + uDusk * 0.95) * clamp(uSunI * 0.3, 0.0, 1.0);
+        skyRefl += vec3(0.66, 0.76, 1.0) * pow(max(dot(R, uMoonDir), 0.0), 36.0) * uNight * 0.85;
+        skyRefl *= vec3(0.90, 0.95, 1.0);
+
+        // 平面反射：法线把倒影搅碎；三个取样点压掉高频闪烁
+        vec2 suv = vReflectCoord.xy / max(vReflectCoord.w, 0.0001);
+        suv += vec2(N.x, N.z) * (0.045 + rough * 0.085);
+        float edgeDist = min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y));
+        float inFrame = smoothstep(-0.012, 0.035, edgeDist);
+        vec3 refl = texture2D(uReflection, clamp(suv, vec2(0.0015), vec2(0.9985))).rgb * 0.62;
+        refl += texture2D(uReflection, clamp(suv + vec2(0.0022, -0.0015), vec2(0.0015), vec2(0.9985))).rgb * 0.19;
+        refl += texture2D(uReflection, clamp(suv - vec2(0.0022, -0.0015), vec2(0.0015), vec2(0.9985))).rgb * 0.19;
+        refl *= 0.88;
+        refl = mix(skyRefl, refl, inFrame * uReflValid);
 
         float shallow = 1.0 - smoothstep(0.0, 2.6, vDepth);
-        vec3 waterCol = mix(uDeep, uShallow, shallow * 0.8);
-        // 浅水要透出沙底，否则贴着岸的地方是一片黑
-        waterCol = mix(waterCol, vec3(0.30, 0.28, 0.20), shallow * 0.55);
+
+        // 湖底：沙→石；浅水里的光斑由两层细噪声拟出焦散光网
+        float sandy = smoothstep(0.15, 1.15, vDepth);
+        vec3 bottom = mix(vec3(0.215, 0.185, 0.115), vec3(0.085, 0.09, 0.055), sandy);
+        float ca = noise(p * 3.2 + vec2(uTime * 0.22, -uTime * 0.17));
+        float cb = noise(p * 5.7 - vec2(uTime * 0.31, uTime * 0.24));
+        float net = pow(1.0 - abs(ca * 2.0 - 1.0), 6.0) * 0.65 + pow(1.0 - abs(cb * 2.0 - 1.0), 8.0) * 0.35;
+        float causticMask = (1.0 - smoothstep(0.0, 0.95, vDepth)) * smoothstep(0.02, 0.18, vDepth);
+        bottom *= 1.0 + net * causticMask * 0.8;
+
+        // 水体吸收：红光先死，深处剩下蓝绿
+        vec3 absorb = exp(-vDepth * vec3(0.62, 0.40, 0.33));
+        vec3 waterCol = uDeep * (1.0 - absorb) + bottom * absorb;
+        waterCol = mix(waterCol, uShallow, shallow * 0.22);
         // 黄昏的深水不是黑的，它映着紫金色的天
-        waterCol = mix(waterCol, uSunColor * 0.11 + vec3(0.045, 0.035, 0.085), uDusk * 0.6);
+        waterCol = mix(waterCol, uSunColor * 0.10 + vec3(0.040, 0.032, 0.080), uDusk * 0.55);
+        waterCol = mix(waterCol, uDeep * 1.2 + vec3(0.010, 0.016, 0.030), uNight * 0.55);
 
-        // 真正的平面反射：桥、亭子、山和天空都映在水里
-        vec2 suv = vReflectCoord.xy / max(vReflectCoord.w, 0.0001);
-        // 扰动必须够大，波纹才搅得碎太阳的像；太小就是一块均匀的白饼
-        suv.x += N.x * 0.13 + (n4 - 0.5) * 0.009;
-        suv.y += N.z * 0.13 + (n3 - 0.5) * 0.009;
-        // 近处水面可能落在镜像相机视锥外，直接 clamp 会把纹理边缘拉伸成一个大白斑。
-        // 越界处退回解析天空色，边界做一点软过渡。
-        float edgeDist = min(min(suv.x, 1.0 - suv.x), min(suv.y, 1.0 - suv.y));
-        float inFrame = smoothstep(-0.015, 0.03, edgeDist);
-        vec3 refl = texture2D(uReflection, clamp(suv, vec2(0.002), vec2(0.998))).rgb;
-        refl = mix(refl, skyRefl, 0.08);
-        refl = mix(skyRefl, refl, inFrame);
-        // 水面不是镜子，吸收一部分，也顺便压住过曝
-        refl *= 0.86;
+        vec3 col = mix(waterCol, refl, clamp(fres, 0.0, 0.94));
 
-        vec3 col = mix(waterCol, refl, clamp(fres * 0.94, 0.0, 0.92));
-
-        // 太阳镜面：低角度时高光被拉成一条金光大道（指数降低 = 光斑拉长）
+        // 太阳镜面：低角度时高光被拉成一条金光大道
         float sd = max(dot(R, uSunDir), 0.0);
-        float tight = mix(900.0, 150.0, uDusk);
-        float loose = mix(60.0, 22.0, uDusk);
-        // 峰值必须收着点：这一段本来就叠了反射和 Bloom，放开就糊成一片白
-        col += uSunColor * pow(sd, tight) * (5.5 + uDusk * 1.5) * uSunI;
-        col += uSunColor * pow(sd, loose) * (0.06 + uDusk * 0.15) * uSunI;
-        col += uSunColor * pow(sd, 9.0) * 0.02 * uSunI * (0.3 + shallow);
+        float tight = mix(1600.0, 300.0, uDusk);
+        float loose = mix(72.0, 20.0, uDusk);
+        col += uSunColor * pow(sd, tight) * (6.0 + uDusk * 2.0) * uSunI;
+        col += uSunColor * pow(sd, loose) * (0.055 + uDusk * 0.16) * uSunI;
+        col += uSunColor * pow(sd, 9.0) * 0.018 * uSunI * (0.35 + shallow);
 
-        // 碎金：波纹把太阳打碎成一片闪点。白天也要开，否则正对太阳时是一块白饼
-        float sp1 = noise(p * 9.0 + vec2(uTime * 0.55, -uTime * 0.40));
-        float sp2 = noise(p * 21.0 - vec2(uTime * 0.90, uTime * 0.70));
-        float glit = smoothstep(0.60, 0.97, sp1 * 0.62 + sp2 * 0.38);
-        float glitAmt = mix(0.55, 1.15, uDusk);
-        col += uSunColor * glit * pow(sd, mix(420.0, 38.0, uDusk)) * glitAmt * 1.3 * uSunI;
+        // 碎金：波纹把太阳打碎成闪点，迎风面更亮；远处收掉避免闪烁
+        float sp1 = noise(wq * vec2(8.0, 3.2) + vec2(uTime * 0.45, -uTime * 0.32));
+        float sp2 = noise(wq * vec2(19.0, 7.5) - vec2(uTime * 0.85, uTime * 0.62));
+        float glit = smoothstep(0.58, 0.95, sp1 * 0.6 + sp2 * 0.4) * distFade;
+        float glitAmt = mix(0.45, 1.25, uDusk) * mix(0.55, 1.0, smoothstep(0.35, 0.9, gust));
+        col += uSunColor * glit * pow(sd, mix(680.0, 46.0, uDusk)) * glitAmt * 1.5 * uSunI;
 
-        // 岸边一圈细白
-        float foamNoise = noise(p * 1.7 + vec2(uTime * 0.35, 0.0));
-        float foam = smoothstep(0.30, 0.0, vDepth + (foamNoise - 0.5) * 0.18);
-        col = mix(col, vec3(0.42, 0.46, 0.43), foam * 0.34);
+        // 月光：一条碎银，和太阳各走各的路
+        float md = max(dot(R, uMoonDir), 0.0);
+        float moonBand = pow(md, 420.0) * 2.2 + pow(md, 40.0) * 0.10;
+        col += vec3(0.64, 0.74, 1.0) * moonBand * uNight;
+        float mglit = smoothstep(0.42, 0.78, sp1 * 0.55 + sp2 * 0.45);
+        col += vec3(0.72, 0.82, 1.0) * mglit * pow(md, 180.0) * uNight * 0.85 * distFade;
+
+        col += uSunColor * ringGlow * (0.55 + uSunI * 0.22) * (0.35 + fres);
+
+        // 岸边：两道来回舔岸的白边 + 湿沙交界，白边要断续，否则像画了一圈线
+        float foamN = fbm2(p * 0.9 + vec2(uTime * 0.10, -uTime * 0.06));
+        float lapPhase = vDepth * 4.0 + uTime * 0.72 + (foamN - 0.5) * 3.4;
+        float lap = sin(lapPhase) * 0.5 + 0.5;
+        float shoreMask = smoothstep(0.20, 0.0, vDepth + (foamN - 0.5) * 0.16);
+        float foam = shoreMask * (0.15 + 0.85 * smoothstep(0.45, 0.95, lap));
+        foam *= smoothstep(0.22, 0.62, foamN + 0.14);
+        foam += smoothstep(0.06, 0.0, vDepth) * 0.30;
+        foam = clamp(foam, 0.0, 1.0);
+
+        float dayl = smoothstep(0.20, 2.2, uSunI);
+        vec3 foamCol = mix(vec3(0.11, 0.135, 0.15), vec3(0.44, 0.47, 0.42), dayl);
+        col = mix(col, foamCol, foam * 0.34);
 
         // 雾
-        float dist = length(cameraPosition - vWorld);
         float fogF = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
         col = mix(col, uFogColor, fogF);
 
-        // 浅水透出湖底、深水不透（写反了整片湖会变成黑泥）
-        float alpha = mix(0.26, 0.96, smoothstep(0.0, 1.0, vDepth));
-        alpha = max(alpha, foam * 0.5);
+        // 浅水透出湖底、深水不透
+        float alpha = mix(0.42, 0.97, smoothstep(0.0, 1.35, vDepth));
+        alpha = max(alpha, foam * 0.45);
 
         gl_FragColor = vec4(col, alpha);
       }
@@ -241,7 +314,7 @@ function makeWater(radius) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(LAKE.x, LAKE.level, LAKE.z);
   mesh.renderOrder = 2;
-  return { mesh, uniforms };
+  return { mesh, uniforms, ripples };
 }
 
 /* ---------- 木屋用贴图 ---------- */
@@ -597,16 +670,12 @@ function buildCabin(M, site) {
   // 二层北墙小窗
   mkWindow(-0.9, y2 + 1.55, -D / 2 + 0.01, 0.95, 0.85, 'z');
 
-  /* ---- 一层门廊 ---- */
-  g.add(box(doorW + 0.9, 0.16, 0.46, M.woodLight, 0, 0.3, D / 2 + 0.31));
-  g.add(box(doorW + 0.9, 0.16, 0.4, M.woodLight, 0, 0.14, D / 2 + 0.72));
+  /* ---- 一层门廊（台阶按真实地面高度生成，见下方 toWorld 之后） ---- */
   // 门廊雨棚
   const canopy = box(doorW + 1.2, 0.1, 0.9, roofMat, 0, floorY + doorH + 0.52, D / 2 + 0.42);
   canopy.rotation.x = -0.16;
   g.add(canopy);
-  for (const s of [-1, 1]) {
-    g.add(box(0.1, doorH + 0.5, 0.1, M.woodDark, s * (doorW / 2 + 0.42), floorY + (doorH + 0.5) / 2, D / 2 + 0.78));
-  }
+  // 雨棚立柱在地面高度确定后再落地（见下方 toWorld 之后）
 
   /* ---- 一层门 ---- */
   const dfw = 0.1;
@@ -624,7 +693,7 @@ function buildCabin(M, site) {
   const knob = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), M.iron);
   knob.position.set(doorW * 0.87, floorY + doorH * 0.52, 0.07);
   doorPivot.add(knob);
-  doorPivot.rotation.y = -1.62;
+  doorPivot.rotation.y = -Math.PI / 2;  // 向外开：门 box 从 pivot 右侧(0.556,0,0) 转到屋外方向(lz 正)
   g.add(doorPivot);
 
   /* ---- 二层阳台门（玻璃门，朝向湖）---- */
@@ -783,28 +852,155 @@ function buildCabin(M, site) {
     }
   }
 
-  // 地毯（室内无直射光，Lambert 会黑成一片，用基础材质）
-  const rug = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 2.0), new THREE.MeshBasicMaterial({ color: 0x8a4a3e }));
+  /* ---- 壁炉（北墙书架旁）---- */
+  const fireX = -1.45;
+  const fireZ = -D / 2 + 0.45;
+  g.add(box(1.0, 1.35, 0.35, M.woodDark, fireX, floorY + 0.67, fireZ));
+  g.add(box(0.82, 0.7, 0.32, new THREE.MeshLambertMaterial({ color: 0x1a1008 }), fireX, floorY + 0.6, fireZ + 0.03));
+  for (let i = 0; i < 4; i++) {
+    g.add(box(0.18, 0.14, 0.04, new THREE.MeshLambertMaterial({ color: 0x7a6a5a }),
+      fireX - 0.28 + (i % 2) * 0.3, floorY + 0.2 + i * 0.16, fireZ + 0.22));
+  }
+  const firePivot = new THREE.Group();
+  firePivot.position.set(fireX, floorY + 0.48, fireZ + 0.18);
+  g.add(firePivot);
+  const fireMat = new THREE.MeshBasicMaterial({ color: 0xffa846, transparent: true, opacity: 0.85 });
+  firePivot.add(box(0.18, 0.42, 0.16, fireMat, 0, 0.21, 0));
+  firePivot.add(box(0.10, 0.32, 0.10, new THREE.MeshBasicMaterial({ color: 0xffdd66, transparent: true, opacity: 0.9 }), 0, 0.24, 0));
+  firePivot.userData.isFire = true;
+  firePivot.userData.baseY = floorY + 0.48;
+  const fireLight = new THREE.PointLight(0xff8a40, 3.2, 10, 1.8);
+  fireLight.position.set(fireX, floorY + 0.65, fireZ + 0.25);
+  fireLight.userData.isFire = true;
+  g.add(fireLight);
+
+  /* ---- 沙发（靠南墙内侧，进门右手）---- */
+  const sofaX = -1.8;
+  const sofaZ = D / 2 - 0.62;
+  const sofaMat = new THREE.MeshLambertMaterial({ color: 0x7a5a8a });
+  g.add(box(1.6, 0.42, 0.75, sofaMat, sofaX, floorY + 0.21, sofaZ));
+  g.add(box(1.6, 0.55, 0.28, sofaMat, sofaX, floorY + 0.7, sofaZ - 0.23));
+  g.add(box(0.22, 0.5, 0.75, sofaMat, sofaX - 0.69, floorY + 0.45, sofaZ));
+  g.add(box(0.22, 0.5, 0.75, sofaMat, sofaX + 0.69, floorY + 0.45, sofaZ));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    g.add(cyl(0.04, 0.04, 0.18, 6, M.woodDark, sofaX + sx * 0.6, floorY + 0.09, sofaZ + sz * 0.3));
+  }
+  g.add(box(0.36, 0.3, 0.2, new THREE.MeshLambertMaterial({ color: 0xd4a96a }), sofaX - 0.5, floorY + 0.68, sofaZ - 0.05));
+  g.add(box(0.32, 0.28, 0.18, new THREE.MeshLambertMaterial({ color: 0xb8564a }), sofaX + 0.5, floorY + 0.66, sofaZ - 0.05));
+
+  g.add(box(0.9, 0.06, 0.5, M.woodLight, sofaX, floorY + 0.45, sofaZ - 0.7));
+  g.add(box(0.05, 0.45, 0.05, M.woodDark, sofaX - 0.38, floorY + 0.225, sofaZ - 0.47));
+  g.add(box(0.05, 0.45, 0.05, M.woodDark, sofaX + 0.38, floorY + 0.225, sofaZ - 0.47));
+  g.add(cyl(0.08, 0.1, 0.12, 8, new THREE.MeshLambertMaterial({ color: 0x886644 }), sofaX - 0.15, floorY + 0.54, sofaZ - 0.72));
+
+  /* ---- 墙上挂画 ---- */
+  const mkPainting = (cx, cy, cz, ry, col1, col2) => {
+    const p = new THREE.Group();
+    p.add(box(0.52, 0.42, 0.03, M.woodDark, 0, 0, 0));
+    const canvas = new THREE.Mesh(new THREE.PlaneGeometry(0.44, 0.34), new THREE.MeshLambertMaterial({ color: col1 }));
+    canvas.position.z = 0.016;
+    p.add(canvas);
+    const accent = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.14), new THREE.MeshLambertMaterial({ color: col2 }));
+    accent.position.set(0.06, -0.04, 0.018);
+    p.add(accent);
+    p.position.set(cx, cy, cz);
+    p.rotation.y = ry;
+    g.add(p);
+  };
+  mkPainting(W / 2 - 0.35, floorY + 1.8, 0, -Math.PI / 2, 0x6b8fbf, 0xf0c060);
+  mkPainting(-W / 2 + 0.35, floorY + 1.7, 0, Math.PI / 2, 0xbf8a6b, 0x5a7a4a);
+  mkPainting(fireX - 0.8, floorY + 1.95, -D / 2 + 0.03, 0, 0x4a6b4a, 0xd4a96a);
+
+  /* ---- 角落盆栽 ---- */
+  const mkPlant = (cx, cz) => {
+    const p = new THREE.Group();
+    p.add(cyl(0.12, 0.14, 0.16, 10, new THREE.MeshLambertMaterial({ color: 0xb87a4a }), 0, 0.08, 0));
+    p.add(cyl(0.11, 0.11, 0.03, 10, new THREE.MeshLambertMaterial({ color: 0x3a2a1a }), 0, 0.17, 0));
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2;
+      const h = 0.25 + ((i * 13) % 5) * 0.02;
+      p.add(box(0.06, h, 0.06, new THREE.MeshLambertMaterial({ color: [0x3a6a3a, 0x4a7a4a, 0x5a8a5a][i % 3] }),
+        Math.cos(ang) * 0.04, 0.17 + h / 2, Math.sin(ang) * 0.04));
+    }
+    p.add(box(0.05, 0.18, 0.05, new THREE.MeshLambertMaterial({ color: 0x4a7a4a }), 0, 0.3, 0));
+    p.position.set(cx, floorY, cz);
+    g.add(p);
+  };
+  mkPlant(W / 2 - 0.35, -D / 2 + 0.35);
+  mkPlant(-W / 2 + 0.35, -D / 2 + 0.35);
+
+  // 地毯
+  const rugBorder = new THREE.Mesh(new THREE.PlaneGeometry(2.7, 2.1), new THREE.MeshBasicMaterial({ color: 0x6b3a2e }));
+  rugBorder.rotation.x = -Math.PI / 2;
+  rugBorder.position.set(1.1, floorY + 0.008, 0.6);
+  rugBorder.receiveShadow = true;
+  g.add(rugBorder);
+  const rug = new THREE.Mesh(new THREE.PlaneGeometry(2.5, 1.9), new THREE.MeshBasicMaterial({ color: 0x8a4a3e }));
   rug.rotation.x = -Math.PI / 2;
   rug.position.set(1.1, floorY + 0.012, 0.6);
   rug.receiveShadow = true;
   g.add(rug);
 
-  /* ---- 二层家具：床、柜 ---- */
+  /* ---- 二层家具 ---- */
   const bedX = 1.25;
   const bedZ = -1.15;
   g.add(box(1.55, 0.3, 2.15, M.woodDark, bedX, y2 + 0.15, bedZ));
   g.add(box(1.45, 0.16, 2.0, new THREE.MeshLambertMaterial({ color: 0xd8cfbe }), bedX, y2 + 0.36, bedZ));
-  // 被子
-  g.add(box(1.48, 0.1, 1.3, new THREE.MeshLambertMaterial({ color: 0x9a9384 }), bedX, y2 + 0.47, bedZ + 0.3));
-  // 枕头
-  g.add(box(0.62, 0.11, 0.36, new THREE.MeshLambertMaterial({ color: 0xe6dfd0 }), bedX, y2 + 0.47, bedZ - 0.78));
-  // 床头板
+  // 被子（温馨的粉紫色）
+  g.add(box(1.48, 0.1, 1.3, new THREE.MeshLambertMaterial({ color: 0xa88aa8 }), bedX, y2 + 0.47, bedZ + 0.3));
+  // 枕头（柔软白色）
+  g.add(box(0.62, 0.11, 0.36, new THREE.MeshLambertMaterial({ color: 0xf0e8dc }), bedX, y2 + 0.47, bedZ - 0.78));
   g.add(box(1.55, 0.6, 0.07, M.woodLight, bedX, y2 + 0.55, bedZ - 1.06));
 
-  // 床头小柜
+  // 床头小柜 + 台灯
   g.add(box(0.44, 0.5, 0.4, M.woodLight, bedX + 1.0, y2 + 0.25, bedZ - 0.8));
   g.add(cyl(0.07, 0.07, 0.16, 8, M.iron, bedX + 1.0, y2 + 0.58, bedZ - 0.8));
+  const bedsideLamp = new THREE.PointLight(0xffb066, 1.8, 7, 1.5);
+  bedsideLamp.position.set(bedX + 1.0, y2 + 0.75, bedZ - 0.8);
+  g.add(bedsideLamp);
+  const bedsideBulb = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), M.warmGlow);
+  bedsideBulb.position.copy(bedsideLamp.position);
+  g.add(bedsideBulb);
+
+  /* ---- 衣柜（靠西墙）---- */
+  const closetX = -W / 2 + 0.42;
+  const closetZ = -0.3;
+  g.add(box(1.1, 1.85, 0.55, M.woodLight, closetX, y2 + 0.925, closetZ));
+  g.add(box(0.02, 1.75, 0.5, M.woodDark, closetX, y2 + 0.925, closetZ + 0.28));
+  for (const sy of [-0.4, -0.05, 0.3]) {
+    g.add(box(0.02, 0.04, 0.04, new THREE.MeshLambertMaterial({ color: 0xd4a96a }), closetX, y2 + 0.55 + sy, closetZ + 0.3));
+  }
+  // 衣柜里露出的衣服
+  g.add(box(0.18, 0.48, 0.05, new THREE.MeshLambertMaterial({ color: 0x4a6a8a }), closetX - 0.1, y2 + 1.25, closetZ + 0.2));
+  g.add(box(0.16, 0.42, 0.05, new THREE.MeshLambertMaterial({ color: 0xb85a5a }), closetX + 0.12, y2 + 1.22, closetZ + 0.2));
+
+  /* ---- 书桌（靠窗）---- */
+  const deskX = W / 2 - 0.7;
+  const deskZ = 0.5;
+  g.add(box(1.1, 0.06, 0.6, M.woodLight, deskX, y2 + 0.78, deskZ));
+  g.add(box(0.05, 0.78, 0.05, M.woodDark, deskX - 0.48, y2 + 0.39, deskZ - 0.24));
+  g.add(box(0.05, 0.78, 0.05, M.woodDark, deskX + 0.48, y2 + 0.39, deskZ - 0.24));
+  g.add(box(0.05, 0.78, 0.05, M.woodDark, deskX - 0.48, y2 + 0.39, deskZ + 0.24));
+  g.add(box(0.05, 0.78, 0.05, M.woodDark, deskX + 0.48, y2 + 0.39, deskZ + 0.24));
+  // 桌上台灯
+  const deskLamp = new THREE.PointLight(0xffc080, 2.0, 7, 1.5);
+  deskLamp.position.set(deskX - 0.3, y2 + 1.05, deskZ);
+  g.add(deskLamp);
+  const deskBulb = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), M.warmGlow);
+  deskBulb.position.copy(deskLamp.position);
+  g.add(deskBulb);
+  g.add(cyl(0.02, 0.02, 0.2, 6, M.iron, deskX - 0.3, y2 + 0.92, deskZ));
+  // 桌上小物件：书 + 杯子
+  g.add(box(0.22, 0.04, 0.16, new THREE.MeshLambertMaterial({ color: 0x3f5a7a }), deskX + 0.2, y2 + 0.83, deskZ));
+  g.add(cyl(0.04, 0.035, 0.08, 8, new THREE.MeshLambertMaterial({ color: 0xdddddd }), deskX + 0.38, y2 + 0.85, deskZ - 0.08));
+
+  /* ---- 二层挂画 ---- */
+  mkPainting(W / 2 - 0.35, y2 + 1.55, 0, -Math.PI / 2, 0x8abf8a, 0xffdd88);
+  mkPainting(-W / 2 + 0.35, y2 + 1.5, -1.5, Math.PI / 2, 0xbfb88a, 0x4a5a7a);
+
+  /* ---- 二层小盆栽 ---- */
+  mkPlant(-W / 2 + 0.35, D / 2 - 0.4);
+  mkPlant(W / 2 - 0.35, D / 2 - 0.4);
 
   /* ---- 灯 ---- */
   const lamp = new THREE.PointLight(0xffb066, 2.2, 12, 1.5);
@@ -846,6 +1042,34 @@ function buildCabin(M, site) {
     colliders.push({ cx: w.x, cz: w.z, cos, sin, hx, hz, y0, y1 });
   };
 
+  /* ---- 门前台阶：从门口的真实地面一路砌到门槛。
+     屋基取的是四角最高点，门口地面可能低出 0.8m；台阶既是可见的木踏步，
+     也要登记成可站立面（porchSteps），否则抬腿高度不够，门开着也进不去。 ---- */
+  const stepW = doorW + 0.7;
+  const stepRun = 0.32;
+  const stepRise = 0.17;
+  const probeA = toWorld(0, D / 2 + 0.55);
+  const probeB = toWorld(0, D / 2 + 1.5);
+  const doorGround = Math.min(heightAt(probeA.x, probeA.z), heightAt(probeB.x, probeB.z)) - 0.02;
+  const stepCount = clamp(Math.ceil((groundY + floorY - doorGround) / stepRise), 2, 7);
+  const porchSteps = [];
+  for (let i = 1; i <= stepCount; i++) {
+    const lz = D / 2 + 0.02 + (i - 0.5) * stepRun;
+    const localTop = Math.max(floorY - (i - 1) * stepRise, doorGround - groundY);
+    g.add(box(stepW, 0.16, stepRun + 0.06, M.woodLight, 0, localTop - 0.08, lz));
+    porchSteps.push({ lz, y: localTop });
+  }
+
+  // 雨棚立柱：落到真实地面，别悬在台阶上方
+  for (const s of [-1, 1]) {
+    const px = s * (doorW / 2 + 0.42);
+    const pz = D / 2 + 0.78;
+    const wp = toWorld(px, pz);
+    const baseY = Math.min(heightAt(wp.x, wp.z), doorGround) - groundY - 0.06;
+    const topY = floorY + doorH + 0.5;
+    g.add(box(0.1, topY - baseY, 0.1, M.woodDark, px, (topY + baseY) / 2, pz));
+  }
+
   // 一层墙（从地面到楼板）
   pushWall(0, -D / 2 + T / 2, W / 2, T / 2, groundY - 1, groundY + y2 - 0.05);
   pushWall(-W / 2 + T / 2, 0, T / 2, D / 2, groundY - 1, groundY + y2 - 0.05);
@@ -875,8 +1099,11 @@ function buildCabin(M, site) {
   const stairMid = toWorld(stairCX, (runZ0 + runZ1) / 2);
 
   const cabinDecks = [
-    mkDeck(0, 0, W / 2 - 0.12, D / 2 - 0.12, floorY),
-    // 楼梯：沿局部 z 从低到高
+    // 门口台阶：必须算可站立面，否则地板高于“抬腿高度”，门开着也进不去
+    ...porchSteps.map((s) => mkDeck(0, s.lz, stepW / 2, stepRun / 2 + 0.04, s.y)),
+    // hz 延伸到 D/2 + 0.06，盖过门洞前沿与 porchStep 最内一级之间的 gap
+    mkDeck(0, 0, W / 2 - 0.12, D / 2 + 0.06, floorY),
+    // 楼梯：dy 阶梯状插值（不是直线），否则玩家脚底下悬空 ~0.1~0.18m
     {
       x: stairMid.x,
       z: stairMid.z,
@@ -887,6 +1114,8 @@ function buildCabin(M, site) {
       y: groundY + floorY,
       y0: groundY + y2,
       y1: groundY + floorY,
+      stair: true,
+      steps,
     },
     mkDeck((stX1 + W / 2) / 2, 0, (W / 2 - stX1) / 2, D / 2 - 0.12, y2),
     mkDeck((stX0 + stX1) / 2, (stZ0 - D / 2) / 2, (stX1 - stX0) / 2, (stZ0 + D / 2) / 2 - 0.12, y2),
@@ -1010,11 +1239,12 @@ function buildBridge(M, from, to, width = 2.0) {
   const dz = to.z - from.z;
   const len = Math.hypot(dx, dz);
   const yaw = Math.atan2(dx, dz);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
 
+  // 桥面高度：岸端略高，跨湖起拱明显
   const deckY = LAKE.level + 0.62;
-  // 桥面高度沿桥采样：始终高出地形一点，再缓缓降到湖面
-  const startY = heightAt(from.x, from.z) + 0.12;
-  const archH = 0.12;
+  const startY = heightAt(from.x, from.z) + 0.14;
+  const archH = 0.38;
   const N = 64;
   const profile = new Float32Array(N + 1);
   for (let i = 0; i <= N; i++) {
@@ -1032,7 +1262,7 @@ function buildBridge(M, from, to, width = 2.0) {
   };
   const rnd = mulberry32(31337);
 
-  // 桥板
+  // 桥板：每块略歪，有三档木色轮换
   const plankW = 0.19;
   const count = Math.floor(len / (plankW + 0.045));
   for (let i = 0; i < count; i++) {
@@ -1044,8 +1274,8 @@ function buildBridge(M, from, to, width = 2.0) {
     g.add(p);
   }
 
-  // 桥墩
-  const piers = Math.max(2, Math.round(len / 6));
+  // 桥墩：沿桥均匀分布，有横撑+斜撑
+  const piers = Math.max(2, Math.round(len / 7));
   for (let i = 1; i < piers; i++) {
     const t = i / piers;
     const x = from.x + dx * t;
@@ -1055,12 +1285,10 @@ function buildBridge(M, from, to, width = 2.0) {
     const h = top - bottom;
     if (h < 0.15) continue;
     for (const s of [-1, 1]) {
-      const px = x + Math.cos(yaw) * s * (width / 2 - 0.12);
-      const pz = z - Math.sin(yaw) * s * (width / 2 - 0.12);
+      const px = x + cy * s * (width / 2 - 0.12);
+      const pz = z - sy * s * (width / 2 - 0.12);
       g.add(cyl(0.1, 0.12, h, 8, M.woodDark, px, bottom + h / 2, pz));
     }
-
-    // 桥墩之间的横撑和斜撑，让露出水面的桩看起来是桥的一部分
     const braceY = LAKE.level + 0.42;
     if (braceY > bottom + 0.2 && braceY < top - 0.35) {
       g.add(box(width - 0.24, 0.09, 0.09, M.woodDark, x, braceY, z, yaw));
@@ -1078,12 +1306,14 @@ function buildBridge(M, from, to, width = 2.0) {
     }
   }
 
-  // 栏杆：分段跟着桥面，立柱落地
+  // 栏杆：上横杆 + 下横杆 + 立柱 + 望柱（每 3 根一根加粗 + 柱头）
   const railH = 0.62;
-  const posts = Math.max(2, Math.round(len / 3.2));
+  const posts = Math.max(4, Math.round(len / 2.6));
   for (const s of [-1, 1]) {
-    const ox = Math.cos(yaw) * s * (width / 2 - 0.06);
-    const oz = -Math.sin(yaw) * s * (width / 2 - 0.06);
+    const ox = cy * s * (width / 2 - 0.06);
+    const oz = -sy * s * (width / 2 - 0.06);
+
+    // 上横杆（分段跟随桥面高度）
     for (let i = 0; i < posts; i++) {
       const t0 = i / posts;
       const t1 = (i + 1) / posts;
@@ -1094,24 +1324,94 @@ function buildBridge(M, from, to, width = 2.0) {
       const segY = (yAt(t0) + yAt(t1)) / 2 + railH;
       const segLen = Math.hypot(x1 - x0, z1 - z0) + 0.03;
       g.add(box(0.07, 0.07, segLen, M.woodLight, (x0 + x1) / 2, segY, (z0 + z1) / 2, yaw));
+      // 下横杆（yAt + 0.22 处）
+      const segLY = (yAt(t0) + yAt(t1)) / 2 + 0.22;
+      g.add(box(0.055, 0.055, segLen, M.woodLight, (x0 + x1) / 2, segLY, (z0 + z1) / 2, yaw));
     }
+
+    // 立柱 + 望柱（每 3 根一根加粗并加柱头）
     for (let i = 0; i <= posts; i++) {
       const t = i / posts;
       const x = from.x + dx * t;
       const z = from.z + dz * t;
-      g.add(box(0.075, railH, 0.075, M.woodDark, x + ox, yAt(t) + railH / 2, z + oz, yaw));
+      const isEnd = i === 0 || i === posts;
+      const isWangzhu = isEnd || i % 3 === 0;  // 望柱：两端 + 每 3 根
+      if (isWangzhu) {
+        // 望柱：加粗 + 柱头（小方块 + 圆珠）
+        g.add(box(0.1, railH, 0.1, M.woodDark, x + ox, yAt(t) + railH / 2, z + oz, yaw));
+        // 柱头
+        g.add(box(0.14, 0.05, 0.14, M.woodDark, x + ox, yAt(t) + railH + 0.025, z + oz, yaw));
+        g.add(cyl(0.04, 0.045, 0.08, 10, M.iron, x + ox, yAt(t) + railH + 0.09, z + oz));
+      } else {
+        g.add(box(0.07, railH, 0.07, M.woodDark, x + ox, yAt(t) + railH / 2, z + oz, yaw));
+      }
+    }
+  }
+
+  // 桥头石墩（两端各一对，像石狮子基座那样）
+  for (const tail of [0, 1]) {
+    const t = tail;
+    const x = from.x + dx * t;
+    const z = from.z + dz * t;
+    const baseY = Math.max(heightAt(x, z) - 0.05, yAt(t) - 0.3);
+    for (const s of [-1, 1]) {
+      const px = x + cy * s * (width / 2 + 0.06);
+      const pz = z - sy * s * (width / 2 + 0.06);
+      // 石墩：方石 + 圆顶
+      g.add(box(0.55, 0.35, 0.55, M.stoneDark, px, baseY + 0.175, pz));
+      g.add(cyl(0.18, 0.22, 0.12, 12, M.stone, px, baseY + 0.41, pz));
+      // 连一个铁链装饰（简化：一条细绳）
+      if (tail === 0) {
+        const midX = px + cy * 1.2;
+        const midZ = pz - sy * 1.2;
+        g.add(cyl(0.015, 0.015, Math.hypot(dx, dz) * 0.06, 4, M.iron, midX, baseY + 0.5, midZ));
+      }
+    }
+  }
+
+  // 中段小桥亭：在 t≈0.52 处（拱顶附近，视觉焦点）
+  if (len > 14) {
+    const tt = 0.52;
+    const tx = from.x + dx * tt;
+    const tz = from.z + dz * tt;
+    const tyAw = yAt(tt);
+    // 亭子底座（略宽于桥）
+    const padS = width / 2 + 0.35;
+    g.add(box(padS * 2 + 0.15, 0.09, padS * 2 + 0.15, M.plank, tx, tyAw + 0.05, tz, yaw));
+    // 四柱（立在桥面上）
+    const colH = 1.6;
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const lx = sx * (padS - 0.18);
+        const lz = sz * (padS - 0.18);
+        g.add(cyl(0.065, 0.08, colH, 8, M.woodDark, tx + cy * lx + sy * lz, tyAw + 0.09 + colH / 2, tz - sy * lx + cy * lz));
+      }
+    }
+    // 横梁
+    const beamY = tyAw + 0.09 + colH;
+    g.add(box(padS * 2 + 0.05, 0.07, 0.07, M.woodDark, tx, beamY, tz + (padS - 0.18), yaw));
+    g.add(box(padS * 2 + 0.05, 0.07, 0.07, M.woodDark, tx, beamY, tz - (padS - 0.18), yaw));
+    // 顶棚：小攒尖
+    const roof = new THREE.Mesh(
+      new THREE.ConeGeometry(padS * 1.1, 0.9, 4, 1, true),
+      M.roofTile
+    );
+    roof.position.set(tx, beamY + 0.45, tz);
+    roof.rotation.y = Math.PI / 4;
+    g.add(roof);
+    // 亭内两侧短凳
+    for (const s of [-1, 1]) {
+      g.add(box(padS * 1.4, 0.06, 0.22, M.woodLight, tx, tyAw + 0.22, tz + s * padS * 0.6, yaw));
     }
   }
 
   return {
     group: g,
-    // 桥面占一条带：局部坐标判定
     deck: {
       x: from.x + dx / 2,
       z: from.z + dz / 2,
       hx: width / 2,
       hz: len / 2,
-      // inDeck 用的是另一套局部坐标，这里必须跟着它的约定
       cos: dz / len,
       sin: -dx / len,
       y: deckY + 0.1,
@@ -1214,6 +1514,368 @@ function buildStation(M, site) {
   };
 }
 
+/* ---------- 节日装饰 ---------- */
+function glowTexture(r, g, b) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  const grad = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  grad.addColorStop(0, `rgba(${r},${g},${b},1)`);
+  grad.addColorStop(0.35, `rgba(${r},${g},${b},0.55)`);
+  grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+
+function buildFestival(M) {
+  const root = new THREE.Group();
+  root.visible = false;
+
+  // 灯笼纸受一盏暖光点灯照亮：夜里门廊和灯笼一起亮起来，才是节日该有的气氛
+  const paper = new THREE.MeshStandardMaterial({ color: 0xe02f22, roughness: 0.55 });
+  const paperDeep = new THREE.MeshStandardMaterial({ color: 0xb02818, roughness: 0.6 });
+  const gold = new THREE.MeshStandardMaterial({ color: 0xe8b84e, roughness: 0.45, metalness: 0.3 });
+  const glow = new THREE.MeshBasicMaterial({
+    color: 0xffa64d, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+
+  /* 门廊暖光：夜里随灯笼亮起，放在门前上方 */
+  const festLight = new THREE.PointLight(0xffb066, 0, 16, 1.8);
+  festLight.position.set(-35.1, 3.6, -41.0);
+  root.add(festLight);
+  const festLight2 = new THREE.PointLight(0xffb066, 0, 9, 1.8);
+  festLight2.position.set(SITES.pavilion.x, LAKE.level + 4.0, SITES.pavilion.z);
+  root.add(festLight2);
+
+  const nightGlows = [];
+  const mkLantern = (x, y, z, s = 1, px, py, pz) => {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15 * s, 0.15 * s, 0.24 * s, 10), paper);
+    g.add(body);
+    for (const dy of [-0.13, 0.13]) {
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.08 * s, 0.09 * s, 0.05 * s, 8), gold);
+      cap.position.y = dy * s;
+      g.add(cap);
+    }
+    const tassel = new THREE.Mesh(new THREE.CylinderGeometry(0.012 * s, 0.012 * s, 0.16 * s, 5), gold);
+    tassel.position.y = -0.27 * s;
+    g.add(tassel);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(0.1 * s, 10, 8), glow);
+    g.add(halo);
+    nightGlows.push(halo);
+    if (px !== undefined) g.position.set(px, py, pz);
+    else g.position.set(x, y, z);
+    return g;
+  };
+
+  /* 灯笼挂点：木屋门廊、亭子四角、车站入口 */
+  const lanterns = new THREE.Group();
+  {
+    const cabin = SITES.cabin;
+    const cos = Math.cos(cabin.yaw), sin = Math.sin(cabin.yaw);
+    const toW = (lx, ly, lz) => ({
+      x: cabin.x + lx * cos - lz * sin,
+      y: ly,
+      z: cabin.z + lx * sin + lz * cos,
+    });
+    for (const s of [-1, 1]) {
+      const a = toW(s * 0.85, 2.62, 2.95);
+      const b = toW(s * 0.45, 2.92, 2.75);
+      lanterns.add(mkLantern(0, 0, 0, 1.25, a.x, a.y, a.z));
+      lanterns.add(mkLantern(0, 0, 0, 1.0, b.x, b.y, b.z));
+    }
+    // 门楣正上方一只大灯笼，进门就能看见
+    const big = toW(0, 2.72, 2.62);
+    lanterns.add(mkLantern(0, 0, 0, 1.6, big.x, big.y, big.z));
+    const pav = SITES.pavilion;
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      lanterns.add(mkLantern(0, 0, 0, 0.85, pav.x + sx * 3.0, 4.1, pav.z + sz * 3.0));
+    }
+
+  }
+  root.add(lanterns);
+
+  /* 春联（木屋门口，随屋旋转） */
+  const couplets = new THREE.Group();
+  {
+    const cabin = SITES.cabin;
+    const cos = Math.cos(cabin.yaw), sin = Math.sin(cabin.yaw);
+    const toW = (lx, ly, lz) => ({
+      x: cabin.x + lx * cos - lz * sin,
+      y: ly,
+      z: cabin.z + lx * sin + lz * cos,
+    });
+    const mkC = (lx, ly, lz, w, h, rotZ) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.03), paper);
+      const p = toW(lx, ly, lz);
+      m.position.set(p.x, p.y, p.z);
+      m.rotation.y = cabin.yaw;
+      m.rotation.z = rotZ || 0;
+      return m;
+    };
+    for (const s of [-1, 1]) {
+      const c = mkC(s * 0.78, 1.55, 2.76, 0.26, 1.5);
+      couplets.add(c);
+      const zi = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.62, 0.012), gold);
+      const zp = toW(s * 0.78, 1.55, 2.775);
+      zi.position.set(zp.x, zp.y, zp.z);
+      zi.rotation.y = cabin.yaw;
+      couplets.add(zi);
+    }
+    const h = mkC(0, 2.66, 2.76, 1.15, 0.24);
+    couplets.add(h);
+    const hz = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.12, 0.012), gold);
+    const hp = toW(0, 2.66, 2.775);
+    hz.position.set(hp.x, hp.y, hp.z);
+    hz.rotation.y = cabin.yaw;
+    couplets.add(hz);
+  }
+  root.add(couplets);
+
+  /* 龙舟（端午，泊在亭子西侧水面） */
+  const dragonBoat = new THREE.Group();
+  {
+    const bx = LAKE.x - 16, bz = LAKE.z + 9;
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(5.4, 0.55, 1.05), M.wood);
+    dragonBoat.add(hull);
+    for (const s of [-1, 1]) {
+      const tip = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.4, 0.8), M.woodDark);
+      tip.position.set(s * 3.05, 0.28, 0);
+      tip.rotation.z = -s * 0.55;
+      dragonBoat.add(tip);
+    }
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.4), paper);
+    head.position.set(3.5, 0.62, 0);
+    dragonBoat.add(head);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), gold);
+    eye.position.set(3.74, 0.72, 0.14);
+    dragonBoat.add(eye);
+    const horn = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.06, 0.5, 6), gold);
+    horn.position.set(3.4, 1.0, 0);
+    horn.rotation.z = -0.7;
+    dragonBoat.add(horn);
+    const drum = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.4, 10), paper);
+    drum.position.set(0.4, 0.75, 0);
+    dragonBoat.add(drum);
+    const drumTop = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.02, 10), M.woodLight);
+    drumTop.position.set(0.4, 0.96, 0);
+    dragonBoat.add(drumTop);
+    const flagMats = [paper, gold, new THREE.MeshStandardMaterial({ color: 0x2f8f4e, roughness: 0.7 })];
+    for (let i = 0; i < 3; i++) {
+      const f = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.2), flagMats[i % 3]);
+      f.material.side = THREE.DoubleSide;
+      f.position.set(-1.2 + i * 1.2, 1.15, 0);
+      dragonBoat.add(f);
+    }
+    dragonBoat.position.set(bx, LAKE.level + 0.06, bz);
+    dragonBoat.rotation.y = 0.5;
+  }
+  root.add(dragonBoat);
+
+  /* 艾草束（木屋门旁） */
+  const mugwort = new THREE.Group();
+  {
+    const leafMat = new THREE.MeshStandardMaterial({ color: 0x4c7a35, roughness: 0.85 });
+    const cabin = SITES.cabin;
+    const cos = Math.cos(cabin.yaw), sin = Math.sin(cabin.yaw);
+    for (const s of [-1, 1]) {
+      const lx = s * 1.15, lz = 3.05;
+      const wx = cabin.x + lx * cos - lz * sin;
+      const wz = cabin.z + lx * sin + lz * cos;
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 1.15, 6), M.woodDark);
+      stem.position.set(wx, 0.62, wz);
+      mugwort.add(stem);
+      const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), leafMat);
+      leaf.position.set(wx, 1.22, wz);
+      leaf.scale.y = 0.7;
+      mugwort.add(leaf);
+    }
+  }
+  root.add(mugwort);
+
+  /* 菊花（重阳，木屋门前台阶旁） */
+  const chrys = new THREE.Group();
+  {
+    const petal = new THREE.MeshStandardMaterial({ color: 0xf0c33c, roughness: 0.6 });
+    const pot = new THREE.MeshStandardMaterial({ color: 0x7a4a26, roughness: 0.9 });
+    const cabin = SITES.cabin;
+    const cos = Math.cos(cabin.yaw), sin = Math.sin(cabin.yaw);
+    for (const s of [-1, 1]) {
+      const lx = s * 1.35, lz = 3.2;
+      const wx = cabin.x + lx * cos - lz * sin;
+      const wz = cabin.z + lx * sin + lz * cos;
+      const p = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.16, 0.28, 10), pot);
+      p.position.set(wx, 0.18, wz);
+      chrys.add(p);
+      for (let k = 0; k < 3; k++) {
+        const fl = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), petal);
+        fl.position.set(wx + (k - 1) * 0.15, 0.46 + Math.abs(k - 1) * 0.06, wz);
+        chrys.add(fl);
+      }
+    }
+  }
+  root.add(chrys);
+
+  /* 孔明灯（中秋夜） */
+  const LANTERN_N = 20;
+  const skyLanterns = new THREE.Group();
+  const slGeo = new THREE.BufferGeometry();
+  const slPos = new Float32Array(LANTERN_N * 3);
+  const slSeed = new Float32Array(LANTERN_N);
+  {
+    const rnd = Math.random;
+    for (let i = 0; i < LANTERN_N; i++) {
+      const a = rnd() * TAU;
+      const r = 10 + rnd() * 34;
+      slPos[i * 3] = LAKE.x + Math.cos(a) * r;
+      slPos[i * 3 + 1] = heightAt(slPos[i * 3], slPos[i * 3 + 2]) + 8 + rnd() * 30;
+      slPos[i * 3 + 2] = LAKE.z + Math.sin(a) * r;
+      slSeed[i] = rnd() * 10;
+    }
+    slGeo.setAttribute('position', new THREE.BufferAttribute(slPos, 3));
+  }
+  const slMat = new THREE.PointsMaterial({
+    size: 1.35,
+    map: glowTexture(255, 168, 74),
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    sizeAttenuation: true,
+  });
+  const slPoints = new THREE.Points(slGeo, slMat);
+  slPoints.frustumCulled = false;
+  skyLanterns.add(slPoints);
+  root.add(skyLanterns);
+
+  /* 烟花 */
+  const FIRE_N = 420;
+  const fwGeo = new THREE.BufferGeometry();
+  const fwPos = new Float32Array(FIRE_N * 3);
+  const fwVel = new Float32Array(FIRE_N * 3);
+  const fwLife = new Float32Array(FIRE_N);
+  for (let i = 0; i < FIRE_N; i++) fwLife[i] = -1;
+  fwGeo.setAttribute('position', new THREE.BufferAttribute(fwPos, 3));
+  const fwMat = new THREE.PointsMaterial({
+    size: 0.85,
+    map: glowTexture(255, 201, 106),
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    sizeAttenuation: true,
+  });
+  const fireworks = new THREE.Points(fwGeo, fwMat);
+  fireworks.frustumCulled = false;
+  fireworks.renderOrder = 4;
+  root.add(fireworks);
+
+  const fw = {
+    root,
+    nightGlows,
+    lanterns,
+    couplets,
+    dragonBoat,
+    mugwort,
+    chrys,
+    skyLanterns,
+    slMat,
+    slPos,
+    slSeed,
+    fireworks,
+    fwMat,
+    fwPos,
+    fwVel,
+    fwLife,
+    enabled: false,
+    skyOn: false,
+    nextShot: 0.2,
+    cursor: 0,
+    night: 0,
+
+    update(t, dt, night) {
+      this.night = night;
+      /* 灯笼夜里亮 */
+      const g = 0.08 + night * 0.4;
+      for (const halo of nightGlows) halo.material.opacity = g;
+      festLight.intensity = night * 2.6;
+      festLight2.intensity = night * 1.6;
+
+      /* 龙舟轻轻晃 */
+      dragonBoat.position.y = LAKE.level + 0.16 + Math.sin(t * 0.8) * 0.07;
+      dragonBoat.rotation.z = Math.sin(t * 0.62 + 1.3) * 0.045;
+
+      /* 孔明灯 */
+      slMat.opacity = this.skyOn ? night * 0.85 : 0;
+      if (this.skyOn && night > 0.05) {
+        const p = slPos;
+        for (let i = 0; i < LANTERN_N; i++) {
+          const ix = i * 3;
+          p[ix + 1] += dt * (0.55 + slSeed[i] * 0.03);
+          p[ix] += Math.sin(t * 0.4 + slSeed[i]) * dt * 0.5;
+          p[ix + 2] += Math.cos(t * 0.33 + slSeed[i] * 1.4) * dt * 0.42;
+          if (p[ix + 1] > 62) {
+            const a = Math.random() * TAU;
+            const r = 12 + Math.random() * 40;
+            p[ix] = LAKE.x + Math.cos(a) * r;
+            p[ix + 2] = LAKE.z + Math.sin(a) * r;
+            p[ix + 1] = heightAt(p[ix], p[ix + 2]) + 3;
+          }
+        }
+        slGeo.attributes.position.needsUpdate = true;
+      }
+
+      /* 烟花：只在节日夜里放，连发两响 */
+      fwMat.opacity = this.enabled ? night : 0;
+      if (this.enabled && night > 0.35 && t > this.nextShot) {
+        this.nextShot = t + 5 + Math.random() * 6;
+        for (let shot = 0; shot < 2; shot++) {
+          // 烟花在木屋、湖心亭、湖面上空轮流放，人在哪都能看见
+          const spot = shot === 0
+            ? { x: SITES.cabin.x, z: SITES.cabin.z, r: 22 }
+            : { x: LAKE.x, z: LAKE.z, r: 26 };
+          const a = Math.random() * TAU;
+          const rr = spot.r * Math.random();
+          const cx = spot.x + Math.cos(a) * rr;
+          const cz = spot.z + Math.sin(a) * rr;
+          const cy = 9 + Math.random() * 8;
+          for (let k = 0; k < 90; k++) {
+            const i = this.cursor = (this.cursor + 1) % FIRE_N;
+            const th = Math.random() * Math.PI * 2;
+            const ph = Math.random() * Math.PI;
+            const sp = 9 + Math.random() * 10;
+            fwPos[i * 3] = cx;
+            fwPos[i * 3 + 1] = cy;
+            fwPos[i * 3 + 2] = cz;
+            fwVel[i * 3] = Math.cos(th) * Math.sin(ph) * sp;
+            fwVel[i * 3 + 1] = Math.cos(ph) * sp;
+            fwVel[i * 3 + 2] = Math.sin(th) * Math.sin(ph) * sp;
+            fwLife[i] = 1.8 + Math.random() * 0.9;
+          }
+        }
+      }
+      const p = fwPos, v = fwVel, lf = fwLife;
+      let alive = false;
+      for (let i = 0; i < FIRE_N; i++) {
+        if (lf[i] <= 0) continue;
+        alive = true;
+        lf[i] -= dt;
+        v[i * 3 + 1] -= 7.2 * dt;
+        v[i * 3] *= 1 - dt * 0.7;
+        v[i * 3 + 2] *= 1 - dt * 0.7;
+        p[i * 3] += v[i * 3] * dt;
+        p[i * 3 + 1] += v[i * 3 + 1] * dt;
+        p[i * 3 + 2] += v[i * 3 + 2] * dt;
+        if (lf[i] <= 0) p[i * 3 + 1] = -999;
+      }
+      if (alive) fwGeo.attributes.position.needsUpdate = true;
+    },
+  };
+  return fw;
+}
+
 /* ---------- 汇总 ---------- */
 export function createPlaces(scene, envMap) {
   const M = mats(0.32);
@@ -1232,6 +1894,7 @@ export function createPlaces(scene, envMap) {
   /* 湖 */
   const water = makeWater(LAKE.r * 2.35);
   scene.add(water.mesh);
+  window.__water = water;
 
   /* 亭 */
   const pav = buildPavilion(M, SITES.pavilion);
@@ -1251,16 +1914,29 @@ export function createPlaces(scene, envMap) {
     }
   }
 
-  /* 桥：从西南岸边连到亭子 */
+  /* 桥：从湖岸（lakeDist≈1.0，高度接近水面）连到亭子，两端都在水面附近 */
   {
-    const dx = SITES.pavilion.x - 0;
-    const dz = SITES.pavilion.z - 0;
-    const d = Math.hypot(dx, dz);
-    const nx = dx / d;
-    const nz = dz / d;
-    const shoreT = LAKE.r * 1.5;
-    const from = { x: SITES.pavilion.x - nx * shoreT, z: SITES.pavilion.z - nz * shoreT };
-    const to = { x: SITES.pavilion.x - nx * 2.6, z: SITES.pavilion.z - nz * 2.6 };
+    const pv = SITES.pavilion;
+    const dxP = pv.x - 0;
+    const dzP = pv.z - 0;
+    const dP = Math.hypot(dxP, dzP);
+    const nx = dxP / dP;
+    const nz = dzP / dP;
+    // 搜索真正的湖岸：湖盆在 ld<1.04 把地形全拉到水下，所以岸在 ld≈1.2~1.4
+    // 条件：地形接近水面或出水（h > LAKE.level - 0.3），lakeDist 在 0.95~1.4 之间
+    let shoreT = LAKE.r * 1.1;  // 默认
+    for (let t = LAKE.r * 0.55; t < LAKE.r * 1.4; t += 0.25) {
+      const sx = pv.x - nx * t;
+      const sz = pv.z - nz * t;
+      const ld = lakeDist(sx, sz);
+      const h = heightAt(sx, sz);
+      if (ld >= 0.95 && ld <= 1.4 && h > LAKE.level - 0.02) {
+        shoreT = t;
+        break;
+      }
+    }
+    const from = { x: pv.x - nx * shoreT, z: pv.z - nz * shoreT };
+    const to   = { x: pv.x - nx * 2.6, z: pv.z - nz * 2.6 };
     const bridge = buildBridge(M, from, to, 2.1);
     scene.add(bridge.group);
     decks.push(bridge.deck);
@@ -1284,13 +1960,17 @@ export function createPlaces(scene, envMap) {
   decks.push(...cabin.decks);
   colliders.push(...cabin.colliders);
 
-  /* 站台 */
-  const station = buildStation(M, SITES.station);
-  scene.add(station.group);
-  decks.push(station.deck);
-  colliders.push(...station.colliders);
+  /* 站台已废弃，站台+铁轨全部移除 */
+
+  /* 节日装饰 */
+  const festival = buildFestival(M);
+  scene.add(festival.root);
 
   const tmp = { x: 0, z: 0 };
+
+  // 湖面的随机涟漪：每隔几秒在深水处落一颗
+  let rippleNext = 3.5;
+  let rippleCursor = 0;
 
   function inDeck(d, x, z, pad = 0) {
     const dx = x - d.x;
@@ -1304,7 +1984,8 @@ export function createPlaces(scene, envMap) {
     water,
     cabin,
     pavilion: pav,
-    station,
+
+    festival,
 
     /* 脚下高度：考虑桥面、平台、木屋楼层、楼梯。
        fromY = 玩家当前脚底高度，高于这个 +0.55 的地板够不着，不参与计算，
@@ -1326,9 +2007,16 @@ export function createPlaces(scene, envMap) {
           const k = Math.min(d.profile.length - 1, i + 1);
           dy = d.profile[i] + (d.profile[k] - d.profile[i]) * (f - i) + 0.06;
         } else if (d.y0 !== undefined) {
-          dy = d.y0 + (d.y1 - d.y0) * t + Math.sin(t * Math.PI) * (d.arch || 0);
+          if (d.stair && d.steps) {
+            // 楼梯阶梯状插值：玩家踩到当前 step box 的顶面（不是直线插值）
+            // t=0 在顶端(高)，t=1 在底端(低)，stepI 从下往上数
+            const stepI = Math.max(0, Math.min(d.steps - 1, Math.floor((1 - t) * d.steps)));
+            dy = d.y1 + ((stepI + 1) / d.steps) * (d.y0 - d.y1);
+          } else {
+            dy = d.y0 + (d.y1 - d.y0) * t + Math.sin(t * Math.PI) * (d.arch || 0);
+          }
         }
-        if (dy > fromY + 0.55) continue;
+        if (dy > fromY + 0.55 && !d.stair) continue;
         if (dy > y) {
           y = dy;
           deckY = dy;
@@ -1394,23 +2082,40 @@ export function createPlaces(scene, envMap) {
       return { x: tmp.x, z: tmp.z };
     },
 
-    update(t, timeState, sunDir, sunIntensity, nightAmount) {
+    update(t, timeState, sunDir, sunIntensity, nightAmount, moonDir) {
       const u = water.uniforms;
+      water.t = t;
       u.uTime.value = t;
       u.uSkyTop.value.copy(timeState.zenith);
       u.uSkyHorizon.value.copy(timeState.horizon);
       u.uSunDir.value.copy(sunDir);
       u.uSunColor.value.copy(timeState.sun);
       u.uSunI.value = timeState.sunI;
+      u.uMoonDir.value.copy(moonDir);
+      u.uNight.value = nightAmount;
       u.uFogColor.value.copy(timeState.fog);
       u.uFogDensity.value = timeState.fogD;
       u.uDusk.value = timeState.dusk || 0;
+
+      if (t > rippleNext) {
+        rippleNext = t + 2.5 + Math.random() * 5.5;
+        for (let k = 0; k < 8; k++) {
+          const a = Math.random() * TAU;
+          const rr = LAKE.r * (0.18 + Math.random() * 0.58);
+          const rx = LAKE.x + Math.cos(a) * rr;
+          const rz = LAKE.z + Math.sin(a) * rr;
+          if (LAKE.level - heightAt(rx, rz) > 1.1) {
+            water.ripples[rippleCursor++ % RIPPLE_COUNT].set(rx, rz, t, 0);
+            break;
+          }
+        }
+      }
 
       // 夜里屋里的灯更明显
       cabin.lamp.intensity = lerp(1.5, 2.8, nightAmount);
       cabin.lamp2.intensity = lerp(0.9, 2.4, nightAmount);
       cabin.balLamp.intensity = lerp(0.0, 2.0, nightAmount);
-      station.stationLamp.intensity = lerp(0.0, 2.2, nightAmount);
+
       M.warmGlow.color.setRGB(
         lerp(0.20, 1.0, nightAmount),
         lerp(0.18, 0.74, nightAmount),

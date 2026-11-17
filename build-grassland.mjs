@@ -20,4 +20,8 @@ mkdirSync('dist', { recursive: true });
 writeFileSync(resolve('dist/grassland.html'), html);
 writeFileSync(resolve('草原.html'), html);
 
-console.log(`built -> 草原.html (${(html.length / 1024).toFixed(0)} KB)`);
+const login = readFileSync('src/login.html', 'utf8');
+writeFileSync(resolve('dist/login.html'), login);
+writeFileSync(resolve('登录.html'), login);
+
+console.log(`built -> 草原.html (${(html.length / 1024).toFixed(0)} KB), 登录.html (${(login.length / 1024).toFixed(0)} KB)`);

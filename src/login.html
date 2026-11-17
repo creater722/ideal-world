@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#e9dcc2">
+<title>理想的世界 · 登录</title>
+<style>
+  :root {
+    --ink: #33321f;
+    --ink-soft: #5b5940;
+    --ink-dim: rgba(51, 50, 31, .52);
+    --paper: #fbf7ea;
+    --olive: #55602f;
+    --olive-hi: #66723a;
+    --olive-deep: #3f4a2a;
+    --gold: #b08a34;
+    --line: rgba(90, 82, 52, .18);
+    --line-strong: rgba(70, 78, 42, .42);
+    --error: #a2412c;
+    --serif: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    background: #e9dcc2;
+  }
+  button, input { font: inherit; color: inherit; }
+  a { color: inherit; }
+
+  /* ---------- 背景 ---------- */
+  .scene {
+    position: fixed; inset: 0; z-index: 0;
+    background:
+      radial-gradient(58% 44% at 78% 6%, rgba(255, 209, 142, .72), rgba(255, 209, 142, 0) 62%),
+      linear-gradient(180deg, #f8edda 0%, #f0e2c6 26%, #e0e1be 52%, #bac88e 76%, #8fa165 100%);
+  }
+  .sun {
+    position: absolute; left: 74%; top: 8%;
+    width: 26vmin; height: 26vmin; margin: -13vmin 0 0 -13vmin;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 250, 226, .95) 0%, rgba(255, 240, 198, .55) 38%, rgba(255, 236, 186, 0) 70%);
+    filter: blur(2px);
+    animation: breathe 12s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { transform: scale(1); opacity: .92; }
+    50% { transform: scale(1.06); opacity: 1; }
+  }
+  .hills { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 64%; pointer-events: none; }
+  .hills path { transition: transform 1.6s cubic-bezier(.22,.61,.36,1); }
+  .hills .far { filter: blur(1.6px); }
+  .mist {
+    position: absolute; left: -12%; right: -12%; bottom: 26%; height: 15%;
+    background: linear-gradient(180deg, rgba(250, 247, 233, 0) 0%, rgba(250, 247, 233, .52) 48%, rgba(250, 247, 233, 0) 100%);
+    filter: blur(16px);
+    animation: drift 26s ease-in-out infinite alternate;
+    pointer-events: none;
+  }
+  @keyframes drift {
+    from { transform: translateX(-2.4%); }
+    to { transform: translateX(2.4%); }
+  }
+  #motes { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+  .vignette {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none;
+    background: radial-gradient(120% 96% at 50% 46%, rgba(0, 0, 0, 0) 52%, rgba(58, 58, 32, .20) 100%);
+    mix-blend-mode: multiply;
+  }
+
+  /* ---------- 布局 ---------- */
+  .wrap {
+    position: relative; z-index: 3;
+    height: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(372px, 428px);
+    align-items: center;
+    gap: clamp(32px, 6vw, 96px);
+    padding: clamp(28px, 6vh, 72px) clamp(28px, 7vw, 120px);
+    max-width: 1440px; margin: 0 auto;
+  }
+
+  .brand { max-width: 520px; animation: rise 1.1s .05s cubic-bezier(.22,.61,.36,1) both; }
+  .eyebrow {
+    font-size: 11px; letter-spacing: .62em; padding-left: .62em;
+    color: var(--ink-dim); margin-bottom: clamp(18px, 3vh, 34px);
+  }
+  .brand h1 {
+    margin: 0;
+    font-family: var(--serif); font-weight: 400;
+    font-size: clamp(44px, 5.6vw, 76px);
+    line-height: 1.16; letter-spacing: .12em;
+    color: #3c4427;
+    text-shadow: 0 2px 40px rgba(255, 251, 233, .86);
+  }
+  .brand .lede {
+    margin: clamp(20px, 3.4vh, 34px) 0 0;
+    font-family: var(--serif);
+    font-size: clamp(13px, 1.15vw, 15px);
+    line-height: 2.05; letter-spacing: .14em;
+    color: rgba(51, 52, 33, .72);
+    text-shadow: 0 1px 18px rgba(253, 250, 238, .8);
+  }
+  .facts {
+    margin: clamp(26px, 4.6vh, 48px) 0 0; padding: 0;
+    list-style: none; display: grid; gap: 13px;
+    max-width: 360px;
+  }
+  .facts li {
+    display: flex; align-items: baseline; gap: 14px;
+    font-size: 12px; letter-spacing: .16em; color: rgba(51, 52, 33, .62);
+  }
+  .facts span {
+    font-family: var(--serif); font-size: 10px; letter-spacing: .1em;
+    color: rgba(80, 90, 48, .58);
+    border-bottom: 1px solid rgba(80, 90, 48, .26);
+    padding-bottom: 2px;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ---------- 卡片 ---------- */
+  .card {
+    position: relative;
+    padding: clamp(24px, 3.4vh, 34px) clamp(22px, 2.2vw, 30px) clamp(18px, 2.6vh, 24px);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, .72);
+    background: linear-gradient(180deg, rgba(253, 250, 240, .93), rgba(247, 243, 229, .90));
+    box-shadow:
+      0 34px 80px rgba(52, 56, 26, .20),
+      0 2px 0 rgba(255, 255, 255, .55) inset,
+      0 0 0 1px rgba(92, 82, 52, .05);
+    backdrop-filter: blur(18px) saturate(1.04);
+    animation: rise 1.3s .18s cubic-bezier(.22,.61,.36,1) both;
+  }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: clamp(20px, 3vh, 30px); }
+
+  .tabs { position: relative; display: flex; gap: 26px; }
+  .tab {
+    position: relative; padding: 0 0 8px;
+    background: none; border: none; cursor: pointer;
+    font-size: 12.5px; letter-spacing: .26em;
+    color: rgba(51, 50, 31, .42);
+    transition: color .32s ease;
+  }
+  .tab::after {
+    content: ""; position: absolute; left: 0; right: .26em; bottom: 0;
+    height: 1px; background: var(--olive-deep);
+    transform: scaleX(0); transform-origin: left;
+    transition: transform .38s cubic-bezier(.22,.61,.36,1);
+  }
+  .tab:hover { color: rgba(51, 50, 31, .7); }
+  .tab.on { color: var(--olive-deep); }
+  .tab.on::after { transform: scaleX(1); }
+  .guest {
+    font-size: 10.5px; letter-spacing: .16em;
+    color: rgba(51, 50, 31, .46); text-decoration: none;
+    padding-bottom: 8px; white-space: nowrap;
+    transition: color .26s ease;
+  }
+  .guest:hover { color: var(--olive-deep); }
+
+  .card h2 {
+    margin: 0 0 8px;
+    font-family: var(--serif); font-weight: 400;
+    font-size: 25px; letter-spacing: .2em;
+    color: #3f452b;
+  }
+  .card .hint {
+    margin: 0 0 clamp(20px, 3vh, 26px);
+    font-size: 11px; letter-spacing: .1em; line-height: 1.7;
+    color: rgba(51, 50, 31, .46);
+  }
+
+  .field { display: block; margin-bottom: 14px; }
+  .field .label {
+    display: block; margin-bottom: 7px;
+    font-size: 10px; letter-spacing: .22em;
+    color: rgba(51, 50, 31, .5);
+  }
+  .field input {
+    width: 100%; padding: 12px 14px;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: rgba(255, 253, 245, .74);
+    font-size: 12.5px; letter-spacing: .04em;
+    outline: none;
+    transition: border-color .28s ease, background .28s ease, box-shadow .28s ease;
+  }
+  .field input::placeholder { color: rgba(51, 50, 31, .3); letter-spacing: .06em; }
+  .field input:hover { border-color: rgba(70, 78, 42, .34); }
+  .field input:focus {
+    border-color: var(--line-strong);
+    background: #fffdf6;
+    box-shadow: 0 0 0 3px rgba(85, 96, 47, .10);
+  }
+  .field.pass { position: relative; }
+  .field.pass input { padding-right: 46px; }
+  .peek {
+    position: absolute; right: 6px; bottom: 6px;
+    width: 32px; height: 32px;
+    display: grid; place-items: center;
+    border: none; border-radius: 8px;
+    background: none; cursor: pointer;
+    color: rgba(51, 50, 31, .38);
+    transition: color .24s ease, background .24s ease;
+  }
+  .peek:hover { color: var(--olive-deep); background: rgba(85, 96, 47, .08); }
+  .peek svg { width: 16px; height: 16px; display: block; }
+
+  .msg {
+    min-height: 20px; margin: 2px 0 12px;
+    font-size: 11px; letter-spacing: .08em; line-height: 1.6;
+    color: var(--error);
+    opacity: 0; transform: translateY(-2px);
+    transition: opacity .26s ease, transform .26s ease;
+  }
+  .msg.show { opacity: 1; transform: none; }
+  .msg.info { color: rgba(51, 50, 31, .58); }
+  .shake { animation: shake .42s cubic-bezier(.36,.07,.19,.97) both; }
+  @keyframes shake {
+    10%, 90% { transform: translateX(-1px); }
+    20%, 80% { transform: translateX(2px); }
+    30%, 50%, 70% { transform: translateX(-4px); }
+    40%, 60% { transform: translateX(4px); }
+  }
+
+  .submit {
+    position: relative; overflow: hidden;
+    width: 100%; padding: 13px 16px;
+    border: 1px solid var(--olive); border-radius: 10px;
+    background: var(--olive); color: #fbf8e9;
+    font-size: 12.5px; letter-spacing: .32em; text-indent: .32em;
+    cursor: pointer;
+    box-shadow: 0 10px 24px rgba(60, 70, 30, .22);
+    transition: background .3s ease, border-color .3s ease, transform .3s ease, box-shadow .3s ease;
+    text-decoration: none;
+    display: block; text-align: center;
+  }
+  .submit:hover { background: var(--olive-hi); border-color: var(--olive-hi); transform: translateY(-1px); box-shadow: 0 14px 28px rgba(60, 70, 30, .26); }
+  .submit:active { transform: translateY(0); }
+  .submit[disabled] { cursor: default; opacity: .78; transform: none; }
+  .submit .spinner {
+    position: absolute; left: 50%; top: 50%;
+    width: 15px; height: 15px; margin: -7.5px 0 0 -7.5px;
+    border: 1.6px solid rgba(251, 248, 233, .34);
+    border-top-color: #fbf8e9; border-radius: 50%;
+    opacity: 0; animation: spin .8s linear infinite;
+    transition: opacity .2s ease;
+  }
+  .loading .submit .spinner { opacity: 1; }
+  .loading .submit .submit-text { opacity: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .switch {
+    margin-top: 16px; text-align: center;
+    font-size: 10.5px; letter-spacing: .12em;
+    color: rgba(51, 50, 31, .44);
+  }
+  .switch button {
+    padding: 0 0 2px; margin-left: 2px;
+    background: none; border: none; border-bottom: 1px solid rgba(85, 96, 47, .35);
+    cursor: pointer; font-size: 10.5px; letter-spacing: .12em; color: var(--olive-deep);
+  }
+  .switch button:hover { border-color: var(--olive-deep); }
+
+  .account { animation: rise .7s cubic-bezier(.22,.61,.36,1) both; }
+  .account-hello {
+    margin: 0 0 8px; padding: 14px 16px;
+    border-radius: 10px; background: rgba(85, 96, 47, .08);
+    font-size: 11.5px; letter-spacing: .1em; color: rgba(51, 50, 31, .7);
+  }
+  .account-hello b { font-weight: 500; color: var(--olive-deep); letter-spacing: .08em; }
+  .account-actions { display: grid; gap: 9px; margin-top: 14px; }
+  .ghost {
+    padding: 11px 14px;
+    border: 1px solid var(--line); border-radius: 10px;
+    background: rgba(255, 252, 240, .6);
+    font-size: 11px; letter-spacing: .2em; cursor: pointer;
+    color: rgba(51, 50, 31, .64);
+    transition: border-color .26s ease, color .26s ease, background .26s ease;
+  }
+  .ghost:hover { border-color: rgba(70, 78, 42, .42); color: var(--olive-deep); background: rgba(255, 253, 244, .94); }
+
+  .foot {
+    margin: clamp(18px, 2.8vh, 26px) 0 0; padding-top: 14px;
+    border-top: 1px solid rgba(92, 82, 52, .10);
+    font-size: 9.5px; letter-spacing: .14em; line-height: 1.8;
+    color: rgba(51, 50, 31, .36); text-align: center;
+  }
+
+  .veil {
+    position: fixed; inset: 0; z-index: 9;
+    display: grid; place-items: center;
+    background: rgba(246, 242, 226, .92);
+    backdrop-filter: blur(10px);
+    opacity: 0; pointer-events: none;
+    transition: opacity .8s ease;
+  }
+  .veil.on { opacity: 1; }
+  .veil-text {
+    font-family: var(--serif); font-size: 15px; letter-spacing: .42em; padding-left: .42em;
+    color: #46512d;
+    animation: breathe 3.2s ease-in-out infinite;
+  }
+
+  :focus-visible { outline: 2px solid rgba(85, 96, 47, .55); outline-offset: 3px; }
+
+  @media (max-width: 900px) {
+    .wrap {
+      grid-template-columns: 1fr;
+      align-content: center;
+      gap: 26px;
+      padding: 28px 20px 32px;
+      max-width: 480px;
+    }
+    .brand { text-align: center; max-width: none; }
+    .brand h1 { font-size: clamp(34px, 9vw, 46px); letter-spacing: .1em; }
+    .brand h1 br { display: none; }
+    .brand .lede { margin-top: 14px; font-size: 12px; line-height: 1.95; }
+    .brand .lede br { display: none; }
+    .facts { display: none; }
+    .eyebrow { margin-bottom: 14px; }
+    .card { padding: 22px 20px 18px; }
+  }
+  @media (max-height: 700px) and (min-width: 901px) {
+    .facts { display: none; }
+    .brand h1 { font-size: clamp(38px, 4.6vw, 58px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    #motes { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="scene" aria-hidden="true">
+  <div class="sun"></div>
+  <div class="mist"></div>
+  <svg class="hills" viewBox="0 0 1440 620" preserveAspectRatio="none" aria-hidden="true">
+    <path d="M0 356 C 210 306, 360 344, 540 380 C 730 418, 880 330, 1060 342 C 1220 353, 1330 400, 1440 372 L1440 620 L0 620 Z" fill="#9aa978" opacity=".30" class="far"/>
+    <path d="M0 430 C 190 366, 330 402, 470 436 C 640 478, 760 392, 930 402 C 1090 412, 1210 470, 1440 424 L1440 620 L0 620 Z" fill="#8b9c62" opacity=".46"/>
+    <path d="M0 486 C 180 432, 340 470, 520 500 C 700 530, 820 452, 1010 464 C 1180 475, 1300 520, 1440 486 L1440 620 L0 620 Z" fill="#71824c" opacity=".58"/>
+    <path d="M0 552 C 220 514, 380 556, 580 566 C 800 577, 980 522, 1180 540 C 1290 550, 1370 566, 1440 556 L1440 620 L0 620 Z" fill="#57653c" opacity=".9"/>
+  </svg>
+</div>
+<canvas id="motes" aria-hidden="true"></canvas>
+<div class="vignette" aria-hidden="true"></div>
+
+<main class="wrap">
+  <section class="brand">
+    <div class="eyebrow">理想的世界</div>
+    <h1>回到<br>你的草原</h1>
+    <p class="lede">菜地、推车、粮仓都留在原地。<br>登录同一个账号，换一台设备也能接着种。</p>
+    <ul class="facts">
+      <li><span>01</span>每 20 秒自动同步</li>
+      <li><span>02</span>离开页面立即保存</li>
+      <li><span>03</span>每个人一份独立世界</li>
+    </ul>
+  </section>
+
+  <section class="card" aria-labelledby="card-title">
+    <div class="card-head">
+      <div class="tabs" role="tablist" aria-label="登录或注册">
+        <button class="tab on" id="tab-login" data-mode="login" role="tab" aria-selected="true">登录</button>
+        <button class="tab" id="tab-register" data-mode="register" role="tab" aria-selected="false">注册</button>
+      </div>
+      <a class="guest" id="guest-link" href="./grassland.html">游客进入 →</a>
+    </div>
+
+    <div id="form-view">
+      <h2 id="card-title">欢迎回来</h2>
+      <p class="hint" id="card-sub">用账号取回你在草原上的进度</p>
+
+      <form id="form" novalidate>
+        <label class="field">
+          <span class="label">用户名</span>
+          <input id="username" name="username" maxlength="24" autocomplete="username" spellcheck="false"
+                 placeholder="3-24 位字母、数字或下划线" required>
+        </label>
+        <label class="field pass">
+          <span class="label">密码</span>
+          <input id="password" name="password" type="password" maxlength="64"
+                 autocomplete="current-password" placeholder="至少 6 位" required>
+          <button class="peek" id="peek" type="button" aria-label="显示密码" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2.2 12S5.6 5.8 12 5.8 21.8 12 21.8 12 18.4 18.2 12 18.2 2.2 12 2.2 12Z"/>
+              <circle cx="12" cy="12" r="3.1"/>
+            </svg>
+          </button>
+        </label>
+
+        <div class="msg" id="msg" role="alert" aria-live="polite"></div>
+
+        <button class="submit" id="submit" type="submit">
+          <span class="submit-text" id="submit-text">登录</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+      </form>
+
+      <div class="switch" id="switch-line">
+        <span id="switch-text">还没有账号？</span>
+        <button id="switch-btn" type="button">现在注册</button>
+      </div>
+    </div>
+
+    <div class="account" id="account" hidden>
+      <h2>已登录</h2>
+      <p class="hint">这个账号的草原进度会在进入游戏后自动载入。</p>
+      <p class="account-hello">当前账号 <b id="account-name"></b></p>
+      <div class="account-actions">
+        <a class="submit" id="enter-link" href="./grassland.html">进入草原</a>
+        <button class="ghost" id="logout" type="button">退出登录</button>
+      </div>
+    </div>
+
+    <p class="foot">账号只用于这个游戏 · 请不要使用常用密码</p>
+  </section>
+</main>
+
+<div class="veil" id="veil" aria-hidden="true"><div class="veil-text">正在进入草原</div></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const TOKEN_KEY = 'iw.cloud.token';
+  const NAME_KEY = 'iw.cloud.name';
+  const isFile = location.protocol === 'file:';
+  const API = isFile
+    ? 'http://121.199.0.224/ideal-world/api/index.php'
+    : new URL('api/index.php', location.href).href;
+  const ENTER = isFile ? '草原.html' : './grassland.html';
+
+  const $ = (id) => document.getElementById(id);
+  const formView = $('form-view');
+  const accountView = $('account');
+  const form = $('form');
+  const userEl = $('username');
+  const passEl = $('password');
+  const msgEl = $('msg');
+  const submitEl = $('submit');
+  const submitText = $('submit-text');
+  const card = document.querySelector('.card');
+  const veil = $('veil');
+  const guestLink = $('guest-link');
+  const enterLink = $('enter-link');
+
+  let mode = 'login';
+  let busy = false;
+
+  guestLink.href = ENTER;
+  enterLink.href = ENTER;
+
+  /* ---------- 已登录状态 ---------- */
+  function storedName() {
+    try { return localStorage.getItem(NAME_KEY) || ''; } catch (e) { return ''; }
+  }
+  function storedToken() {
+    try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+  }
+  function showAccount() {
+    formView.hidden = true;
+    accountView.hidden = false;
+    $('account-name').textContent = storedName();
+  }
+  if (storedToken()) showAccount();
+
+  $('logout').addEventListener('click', () => {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(NAME_KEY);
+    } catch (e) { /* ignore */ }
+    accountView.hidden = true;
+    formView.hidden = false;
+    setMode('login');
+    setMsg('已退出登录', 'info');
+  });
+
+  /* ---------- 模式切换 ---------- */
+  const COPY = {
+    login: {
+      title: '欢迎回来',
+      sub: '用账号取回你在草原上的进度',
+      submit: '登录',
+      switchText: '还没有账号？',
+      switchBtn: '现在注册',
+      placeholder: '至少 6 位',
+      auto: 'current-password',
+    },
+    register: {
+      title: '建一个账号',
+      sub: '注册后，这块草原就跟着你走',
+      submit: '注册并进入',
+      switchText: '已经有账号了？',
+      switchBtn: '去登录',
+      placeholder: '至少 6 位，别用常用密码',
+      auto: 'new-password',
+    },
+  };
+
+  function setMode(next) {
+    mode = next;
+    const c = COPY[mode];
+    $('tab-login').classList.toggle('on', mode === 'login');
+    $('tab-register').classList.toggle('on', mode === 'register');
+    $('tab-login').setAttribute('aria-selected', String(mode === 'login'));
+    $('tab-register').setAttribute('aria-selected', String(mode === 'register'));
+    $('card-title').textContent = c.title;
+    $('card-sub').textContent = c.sub;
+    submitText.textContent = c.submit;
+    $('switch-text').textContent = c.switchText;
+    $('switch-btn').textContent = c.switchBtn;
+    passEl.placeholder = c.placeholder;
+    passEl.setAttribute('autocomplete', c.auto);
+    setMsg('');
+  }
+
+  $('tab-login').addEventListener('click', () => setMode('login'));
+  $('tab-register').addEventListener('click', () => setMode('register'));
+  $('switch-btn').addEventListener('click', () => setMode(mode === 'login' ? 'register' : 'login'));
+
+  /* ---------- 提示 ---------- */
+  let msgTimer = 0;
+  function setMsg(text, kind) {
+    clearTimeout(msgTimer);
+    msgEl.textContent = text || '';
+    msgEl.className = 'msg' + (text ? ' show' : '') + (kind === 'info' ? ' info' : '');
+  }
+  function failMsg(text) {
+    setMsg(text);
+    card.classList.remove('shake');
+    void card.offsetWidth;
+    card.classList.add('shake');
+    msgTimer = setTimeout(() => card.classList.remove('shake'), 520);
+  }
+
+  /* ---------- 密码可见 ---------- */
+  $('peek').addEventListener('click', () => {
+    const shown = passEl.type === 'text';
+    passEl.type = shown ? 'password' : 'text';
+    const btn = $('peek');
+    btn.setAttribute('aria-pressed', String(!shown));
+    btn.setAttribute('aria-label', shown ? '显示密码' : '隐藏密码');
+    passEl.focus();
+  });
+
+  /* ---------- 提交 ---------- */
+  function validate() {
+    const name = userEl.value.trim();
+    const pass = passEl.value;
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(name)) {
+      return { error: '用户名要 3-24 位字母、数字或下划线' };
+    }
+    if (pass.length < 6 || pass.length > 64) {
+      return { error: '密码要 6-64 位' };
+    }
+    return { name, pass };
+  }
+
+  function setBusy(next) {
+    busy = next;
+    submitEl.disabled = next;
+    card.classList.toggle('loading', next);
+  }
+
+  async function call(action, username, password) {
+    const res = await fetch(`${API}?action=${encodeURIComponent(action)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+      cache: 'no-store',
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* ignore */ }
+    return { status: res.status, data };
+  }
+
+  function enterGame() {
+    veil.classList.add('on');
+    setTimeout(() => { location.href = ENTER; }, 760);
+  }
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    const v = validate();
+    if (v.error) { failMsg(v.error); (v.error.indexOf('密码') === 0 ? passEl : userEl).focus(); return; }
+
+    setBusy(true);
+    setMsg(mode === 'register' ? '正在创建账号…' : '正在登录…', 'info');
+    try {
+      const { status, data } = await call(mode === 'register' ? 'register' : 'login', v.name, v.pass);
+      if (status === 200 && data && data.ok) {
+        try {
+          localStorage.setItem(TOKEN_KEY, data.token);
+          localStorage.setItem(NAME_KEY, data.username || v.name);
+        } catch (e) { /* ignore */ }
+        setMsg(mode === 'register' ? '账号已创建，正在进入草原…' : '登录成功，正在载入进度…', 'info');
+        passEl.value = '';
+        enterGame();
+        return;
+      }
+      if (status === 429) failMsg((data && data.error) || '试得太频繁，过几分钟再试');
+      else if (status === 409) failMsg((data && data.error) || '这个用户名已经被用了，换一个或直接登录');
+      else if (status === 401) failMsg((data && data.error) || '用户名或密码不对');
+      else failMsg((data && data.error) || '连不上存档服务，检查一下网络');
+    } catch (e) {
+      failMsg('连不上存档服务，检查一下网络');
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  /* ---------- 背景微动 ---------- */
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const hills = document.querySelector('.hills');
+  if (!reduce) {
+    let tx = 0, ty = 0, cx = 0, cy = 0, raf = 0;
+    window.addEventListener('pointermove', (e) => {
+      tx = (e.clientX / window.innerWidth - .5);
+      ty = (e.clientY / window.innerHeight - .5);
+      if (!raf) raf = requestAnimationFrame(tick);
+    }, { passive: true });
+    function tick() {
+      cx += (tx - cx) * .06;
+      cy += (ty - cy) * .06;
+      hills.style.transform = `translate3d(${(-cx * 18).toFixed(2)}px, ${(-cy * 8).toFixed(2)}px, 0) scale(1.04)`;
+      raf = Math.abs(tx - cx) > .001 || Math.abs(ty - cy) > .001 ? requestAnimationFrame(tick) : 0;
+    }
+  }
+
+  /* ---------- 漂浮花粉 ---------- */
+  const canvas = $('motes');
+  if (!reduce && canvas) {
+    const ctx = canvas.getContext('2d');
+    let w = 0, h = 0, dpr = 1;
+    let motes = [];
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = window.innerWidth; h = window.innerHeight;
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const count = Math.min(46, Math.round(w / 30));
+      motes = Array.from({ length: count }, () => ({
+        x: Math.random() * w,
+        y: Math.random() * h,
+        r: .8 + Math.random() * 1.7,
+        vy: -(.10 + Math.random() * .22),
+        vx: (Math.random() - .5) * .12,
+        a: .10 + Math.random() * .32,
+        p: Math.random() * Math.PI * 2,
+      }));
+    }
+    function frame(t) {
+      ctx.clearRect(0, 0, w, h);
+      for (const m of motes) {
+        m.x += m.vx + Math.sin(t * .0004 + m.p) * .06;
+        m.y += m.vy;
+        if (m.y < -12) { m.y = h + 12; m.x = Math.random() * w; }
+        if (m.x < -12) m.x = w + 12;
+        if (m.x > w + 12) m.x = -12;
+        const flick = .72 + .28 * Math.sin(t * .0012 + m.p);
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(255, 250, 228, ${(m.a * flick).toFixed(3)})`;
+        ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      requestAnimationFrame(frame);
+    }
+    resize();
+    window.addEventListener('resize', resize);
+    requestAnimationFrame(frame);
+  }
+})();
+</script>
+</body>
+</html>

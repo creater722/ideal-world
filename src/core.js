@@ -71,10 +71,10 @@ export function mulberry32(seed) {
 /* ---------------- 世界地理 ---------------- */
 
 export const WORLD = {
-  radius: 210,        // 玩家可走范围
-  terrainSize: 900,   // 地形网格边长
-  rimStart: 168,      // 山脊起坡半径
-  rimFull: 360,
+  radius: 640,        // 玩家可走范围：湖、林子、山脊之间能跑一整圈
+  terrainSize: 2400,  // 地形网格边长
+  rimStart: 520,      // 山脊起坡半径
+  rimFull: 1060,
 };
 
 export const LAKE = {
@@ -113,14 +113,24 @@ function lakeProfile(ld) {
 }
 
 export function heightAt(x, z) {
-  // 大尺度丘陵
-  let h = (fbm(x * 0.0062 + 4.7, z * 0.0062 + 9.2, 5) - 0.5) * 12.4;
+  // 大尺度丘陵：几百米一级的起伏，走过去是真正的坡
+  let h = (fbm(x * 0.0021 + 4.7, z * 0.0021 + 9.2, 5) - 0.5) * 44.0;
   // 中尺度缓坡
-  h += (fbm(x * 0.0195 - 2.0, z * 0.0195 + 6.0, 4) - 0.5) * 2.6;
+  h += (fbm(x * 0.0078 - 2.0, z * 0.0078 + 6.0, 4) - 0.5) * 8.2;
   // 小尺度土埂与坑洼
+  h += (fbm(x * 0.038 + 13, z * 0.038 - 7, 3) - 0.5) * 1.1;
   h += (fbm(x * 0.085 + 13, z * 0.085 - 7, 3) - 0.5) * 0.32;
   // 极细颗粒，近处踩下去有实感
   h += (valueNoise(x * 0.62 + 3.3, z * 0.62 + 8.1) - 0.5) * 0.055;
+
+  const r = Math.hypot(x, z);
+
+  // 中远处的脊状丘陵：湖和林子之外的地不是一张平纸
+  const mid = smoothstep(110, 560, r);
+  if (mid > 0) {
+    const ridge = ridged(x * 0.0026 + 23, z * 0.0026 - 13, 4);
+    h += mid * (ridge - 0.44) * 52.0;
+  }
 
   // 出生点抬升，保证脚下高于水面
   h += 2.1 * Math.exp(-(x * x + z * z) / 6200);
@@ -132,12 +142,11 @@ export function heightAt(x, z) {
     h = lerp(h, lakeProfile(ld), w);
   }
 
-  // 外圈山脊
-  const r = Math.hypot(x, z);
+  // 外圈山脊：盆地边缘一圈真正的山，湖在山脚下
   const rim = smoothstep(WORLD.rimStart, WORLD.rimFull, r);
   if (rim > 0) {
-    const ridge = ridged(x * 0.0042 + 17, z * 0.0042 - 8, 5);
-    h += rim * (8 + ridge * 96);
+    const ridge = ridged(x * 0.0030 + 17, z * 0.0030 - 8, 5);
+    h += rim * (14 + ridge * 180);
   }
 
   return h;

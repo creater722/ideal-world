@@ -6,6 +6,8 @@ import {
 import { createPostFX } from './postfx.js';
 import { createPlaces } from './places.js';
 import { createMusic } from './music.js';
+import { computeCalendar, YEAR_SEC } from './seasons.js';
+import { createWeather } from './weather.js';
 
 /* =========================================================
    理想的世界
@@ -45,7 +47,7 @@ const scene = new THREE.Scene();
 const FOG_COLOR = 0xd9dcc9;
 scene.fog = new THREE.FogExp2(FOG_COLOR, 0.0058);
 
-const camera = new THREE.PerspectiveCamera(61, window.innerWidth / window.innerHeight, 0.1, 1600);
+const camera = new THREE.PerspectiveCamera(61, window.innerWidth / window.innerHeight, 0.1, 3000);
 camera.layers.enable(1);
 camera.rotation.order = 'YXZ';
 
@@ -56,6 +58,14 @@ const whitePixel = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1
 whitePixel.needsUpdate = true;
 
 const NO_SHADOW = new URLSearchParams(location.search).has('noshadow');
+
+/* ---------------- 季节 / 天气 ---------------- */
+const QS = new URLSearchParams(location.search);
+let yearSec = YEAR_SEC;
+if (QS.has('yearsec')) yearSec = clamp(parseFloat(QS.get('yearsec')), 60, 86400);
+let yearOffset = 0; // 调试用：把历法拨到指定节气/季节
+const weather = createWeather(scene);
+let calendar = computeCalendar(0, yearSec);
 
 /* ---------------- 2. 天空 ---------------- */
 const skyUniforms = {
@@ -70,6 +80,8 @@ const skyUniforms = {
   uNight: { value: 0 },
   uCover: { value: 0.42 },
   uDusk: { value: 0 },
+  uMoonBoost: { value: 0 },
+  uStarBoost: { value: 0 },
 };
 
 const skyFrag = /* glsl */ `
@@ -84,6 +96,8 @@ const skyFrag = /* glsl */ `
   uniform float uNight;
   uniform float uCover;
   uniform float uDusk;
+  uniform float uMoonBoost;
+  uniform float uStarBoost;
   varying vec3 vDir;
 
   float hash(vec2 p) {
@@ -160,7 +174,8 @@ const skyFrag = /* glsl */ `
     float sd = max(dot(dir, uSunDir), 0.0);
     // 黄昏时太阳被厚大气削弱，是个柔和橙球，不是刺眼白点
     float sunPeak = mix(5.2, 2.0, uDusk);
-    col += uSunColor * (pow(sd, 14000.0) * sunPeak + pow(sd, 460.0) * mix(0.16, 0.26, uDusk) + pow(sd, 12.0) * 0.035);
+    float sunShade = 1.0 - uCover * 0.85; // 阴天云把太阳藏起来
+    col += uSunColor * (pow(sd, 14000.0) * sunPeak + pow(sd, 460.0) * mix(0.16, 0.26, uDusk) + pow(sd, 12.0) * 0.035) * sunShade;
 
     // 星空
     if (uNight > 0.01 && dir.y > 0.02) {
@@ -169,17 +184,18 @@ const skyFrag = /* glsl */ `
       vec2 f = fract(sph) - 0.5;
       float h = hash(id);
       float twinkle = 0.6 + 0.4 * sin(uTime * 1.7 + h * 63.0);
-      float star = smoothstep(0.06, 0.0, length(f)) * step(0.972, h) * twinkle;
+      float starDense = mix(0.972, 0.958, uStarBoost);
+      float star = smoothstep(0.06, 0.0, length(f)) * step(starDense, h) * twinkle;
       // 银河：一条淡淡的带
       float band = exp(-pow((dir.x * 0.7 + dir.z * 0.7) * 3.2, 2.0));
       col += vec3(0.80, 0.86, 1.0) * star * uNight * smoothstep(0.02, 0.2, dir.y) * 1.4;
-      col += vec3(0.34, 0.38, 0.52) * band * uNight * 0.055 * smoothstep(0.05, 0.4, dir.y);
+      col += vec3(0.34, 0.38, 0.52) * band * uNight * (0.055 + uStarBoost * 0.06) * smoothstep(0.05, 0.4, dir.y);
     }
 
     // 月亮
     if (uNight > 0.01) {
       float md = max(dot(dir, uMoonDir), 0.0);
-      col += vec3(1.0, 0.97, 0.89) * (pow(md, 9000.0) * 7.0 + pow(md, 420.0) * 0.24) * uNight;
+      col += vec3(1.0, 0.97, 0.89) * (pow(md, 9000.0) * (7.0 + uMoonBoost * 6.0) + pow(md, 420.0) * (0.24 + uMoonBoost * 0.5)) * uNight;
     }
 
     gl_FragColor = vec4(col, 1.0);
@@ -195,7 +211,7 @@ const skyVert = /* glsl */ `
 `;
 
 const sky = new THREE.Mesh(
-  new THREE.SphereGeometry(1100, 48, 28),
+  new THREE.SphereGeometry(2900, 48, 28),
   new THREE.ShaderMaterial({
     uniforms: skyUniforms,
     side: THREE.BackSide,
@@ -344,7 +360,7 @@ function sampleTime(h) {
   timeState.hemiGround.lerpColors(a.cHemiGround, b.cHemiGround, t);
   timeState.sunI = lerp(a.sunI, b.sunI, t);
   timeState.hemiI = lerp(a.hemiI, b.hemiI, t);
-  timeState.fogD = lerp(a.fogD, b.fogD, t) * 0.58;
+  timeState.fogD = lerp(a.fogD, b.fogD, t) * 0.34;
   timeState.expo = lerp(a.expo, b.expo, t);
   timeState.elev = lerp(a.elev, b.elev, t);
   timeState.az = lerp(a.az, b.az, t);
@@ -366,6 +382,34 @@ function phaseName(h) {
 let lastClockText = '';
 const clockEl = document.getElementById('clock');
 const placeEl = document.getElementById('place');
+const wxEl = document.getElementById('wx');
+
+function weatherName(w) {
+  if (w.snow > 0.25) return '雪';
+  if (w.rain > 0.6) return '大雨';
+  if (w.rain > 0.15) return '雨';
+  if (w.fog > 0.45) return '雾';
+  if (w.cloud > 0.62) return '阴';
+  if (w.cloud > 0.32) return '多云';
+  return '晴';
+}
+
+let lastWxText = '';
+function updateWeatherHud() {
+  if (!wxEl) return;
+  const fest = calendar.mainFestival;
+  const text = `${calendar.seasonName} · ${calendar.term} · ${weatherName(weather.state)}${fest ? ' · <span class="fest">' + fest.name + '</span>' : ''}`;
+  if (text !== lastWxText) {
+    lastWxText = text;
+    wxEl.innerHTML = text;
+  }
+}
+
+let snowCover = 0;
+let seasonClock = 1;
+let lastAppliedSnow = -1;
+let lastAppliedSeason = -1;
+let hudClock = 1;
 
 function updateClock(h) {
   const hh = Math.floor(h);
@@ -377,9 +421,49 @@ function updateClock(h) {
   }
 }
 
+const C_WEATHER_ZENITH = new THREE.Color(0x9aa4ae);
+const C_WEATHER_HORIZON = new THREE.Color(0xc9c8bd);
+const C_WEATHER_FOG = new THREE.Color(0xc4c6c2);
+const C_SPRING_ZENITH = new THREE.Color(0x8fc4e8);
+const C_SPRING_HORIZON = new THREE.Color(0xfff2d2);
+const C_AUTUMN_HORIZON = new THREE.Color(0xffd9a0);
+const C_AUTUMN_HAZE = new THREE.Color(0xffc98a);
+const C_WINTER_ZENITH = new THREE.Color(0xa8c2d8);
+const C_WINTER_SUN = new THREE.Color(0xfff2e0);
+const FIREFLY_SEASON = [0.55, 1, 0.75, 0.12]; // 萤火虫夏天最多
+const POLLEN_SEASON = [0.6, 0.32, 0.12, 0];  // 花粉春天最盛
+
 function applyTime() {
   const h = ((hour % 24) + 24) % 24;
   sampleTime(h);
+
+  // 天气改写天光：阴天吃光，雨雪把天顶压灰、雾加浓
+  const wx = weather.state;
+  timeState.sunI *= 1 - 0.62 * wx.cloud;
+  timeState.hemiI *= 1 - 0.45 * wx.cloud;
+  timeState.cover = clamp(timeState.cover + wx.cloud * 0.42, 0, 0.95);
+  const wetFog = wx.fog * 0.8 + wx.rain * 0.42 + wx.snow * 0.4;
+  timeState.fogD = timeState.fogD * (1 + wetFog * 1.5) + wetFog * 0.0024;
+  const grey = wx.rain * 0.6 + wx.snow * 0.72 + wx.fog * 0.35;
+  if (grey > 0.002) {
+    timeState.zenith.lerp(C_WEATHER_ZENITH, grey);
+    timeState.horizon.lerp(C_WEATHER_HORIZON, grey);
+    timeState.fog.lerp(C_WEATHER_FOG, grey);
+  }
+  timeState.expo = clamp(timeState.expo - wx.cloud * 0.1, 0.82, 1.08);
+
+  // 季节色调：春青嫩、秋金暖、冬清冷
+  const s = calendar.season;
+  if (s === 0) {
+    timeState.zenith.lerp(C_SPRING_ZENITH, 0.1);
+    timeState.horizon.lerp(C_SPRING_HORIZON, 0.06);
+  } else if (s === 2) {
+    timeState.horizon.lerp(C_AUTUMN_HORIZON, 0.2);
+    timeState.haze.lerp(C_AUTUMN_HAZE, 0.16);
+  } else if (s === 3) {
+    timeState.zenith.lerp(C_WINTER_ZENITH, 0.12);
+    timeState.sun.lerp(C_WINTER_SUN, 0.1);
+  }
 
   const elev = (timeState.elev * Math.PI) / 180;
   const az = (timeState.az * Math.PI) / 180;
@@ -422,11 +506,11 @@ function applyTime() {
   hemiLight.color.copy(timeState.hemiSky);
   hemiLight.groundColor.copy(timeState.hemiGround);
   hemiLight.intensity = timeState.hemiI;
-  renderer.toneMappingExposure = timeState.expo;
+  renderer.toneMappingExposure = timeState.expo + thunderFlash * 0.55;
 
   nightAmount = smoothstep(9, -3, timeState.elev);
-  // 萤火虫要等天真的暗下来，黄昏时出来是穿帮
-  fireflyMat.uniforms.uOpacity.value = smoothstep(4, -5, timeState.elev) * 0.95;
+  // 萤火虫要等天真的暗下来，黄昏时出来是穿帮；夏天最多，冬天几乎绝迹
+  fireflyMat.uniforms.uOpacity.value = smoothstep(4, -5, timeState.elev) * 0.95 * FIREFLY_SEASON[calendar.season];
 
   updateClock(h);
   window.__hour = h;
@@ -771,7 +855,7 @@ function makeButterflyTexture() {
 let terrainMesh = null;
 {
   const SIZE = WORLD.terrainSize;
-  const SEG = 400;
+  const SEG = 600;
   const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
   geo.rotateX(-Math.PI / 2);
 
@@ -798,9 +882,11 @@ let terrainMesh = null;
   const rowLen = SEG + 1;
   const cell = SIZE / SEG;
 
-  const grassA = new THREE.Color(0x7c8748);
-  const grassB = new THREE.Color(0xa6af68);
-  const grassDry = new THREE.Color(0xaca374);
+  // 地面色调压到和远处草叶的平均色一致：
+  // 否则草丛覆盖圈（约 150 米）一到头，裸地面就亮出一圈「草地到头了」的断层
+  const grassA = new THREE.Color(0x67743c);
+  const grassB = new THREE.Color(0x8b9752);
+  const grassDry = new THREE.Color(0x96905f);
   const sand = new THREE.Color(0xb0a586);
   const mud = new THREE.Color(0x4c4a38);
   const rock = new THREE.Color(0x6d6a62);
@@ -853,7 +939,9 @@ let terrainMesh = null;
   }
 
   geo.computeVertexNormals();
-  geo.setAttribute('color', new THREE.BufferAttribute(colorArr, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colorArr.slice(), 3));
+  baseTerrainColors = colorArr;
+  terrainGeo = geo;
 
   const mat = new THREE.MeshStandardMaterial({
     vertexColors: true,
@@ -862,12 +950,108 @@ let terrainMesh = null;
     metalness: 0.0,
     side: THREE.DoubleSide,
   });
+  terrainMat = mat;
 
   const terrain = new THREE.Mesh(geo, mat);
   terrain.frustumCulled = false;
   terrain.receiveShadow = true;
   terrainMesh = terrain;
   scene.add(terrain);
+}
+
+/* 四季落在地形上：顶点色重染 + 材质整体调子。
+   全量 16 万顶点，节流到每 0.5 秒或季节/积雪明显变化时。 */
+let terrainGeo = null;
+let terrainMat = null;
+let baseTerrainColors = null;
+
+const SEASON_TINT = [
+  { r: 0.94, g: 1.12, b: 0.90 },  // 春：嫩
+  { r: 0.88, g: 1.04, b: 0.82 },  // 夏：浓
+  { r: 1.38, g: 0.88, b: 0.42 },  // 秋：金
+  { r: 0.84, g: 0.80, b: 0.66 },  // 冬：枯
+];
+
+/* 永久雪峰 + 雪线分层 + 季节积雪
+   海拔 > 22m 强制白雪（雪峰），12~22m 雪线过渡，12m 以下才看 snowCover
+   同时用法线与竖直方向夹角做山脊高光（fake rim light） */
+function applySeasonTerrain(season, seasonT, snowCover) {
+  if (!terrainGeo) return;
+  const arr = terrainGeo.attributes.color.array;
+  const pos = terrainGeo.attributes.position.array;
+  const nrm = terrainGeo.attributes.normal.array;
+  const t = SEASON_TINT[season];
+
+  // 永久雪峰雪线（海拔）
+  const SNOW_LINE_HIGH = 22;   // >22m 强制白雪
+  const SNOW_LINE_LOW = 12;    // 12~22m 过渡带
+
+  for (let i = 0; i < arr.length; i += 3) {
+    let r = baseTerrainColors[i];
+    let g = baseTerrainColors[i + 1];
+    let b = baseTerrainColors[i + 2];
+    r *= lerp(1, t.r, 1);
+    g *= lerp(1, t.g, 1);
+    b *= lerp(1, t.b, 1);
+
+    const vi = i;  // vertex index
+    const h = pos[vi * 3 + 1];
+    const nx = nrm[vi * 3];
+    const ny = nrm[vi * 3 + 1];
+    const nz = nrm[vi * 3 + 2];
+
+    // ---------- 雪线分层 ----------
+    let snow = 0;
+    if (h > SNOW_LINE_HIGH) {
+      // 雪峰：强制白雪（非冬季也有，比如金顶夕阳照雪顶）
+      snow = 1.0;
+    } else if (h > SNOW_LINE_LOW) {
+      // 雪线过渡带：越高越白 + 季节积雪强度调制
+      const frac = (h - SNOW_LINE_LOW) / (SNOW_LINE_HIGH - SNOW_LINE_LOW);  // 0~1
+      const noise = valueNoise(vi * 0.0031 + 11, vi * 0.0017 - 5);
+      snow = frac * (0.65 + noise * 0.35);
+      if (season === 3) snow = Math.min(1, snow + snowCover * 0.3);
+    } else {
+      // 低海拔：只有冬季 + 足够 snowCover 才盖雪
+      if (season === 3 && snowCover > 0.05) {
+        const noise = valueNoise(vi * 0.0041 + 3, vi * 0.0023 + 7);
+        const wob = 0.4 + noise * 0.6;
+        snow = snowCover * wob;
+        // 陡坡存不住雪：用法线 y 分量（越陡峭 ny 越小）
+        snow *= smoothstep(0.35, 0.85, ny);
+      }
+    }
+
+    // 雪的颜色：偏蓝白 + 一点灰影
+    if (snow > 0.001) {
+      const sw = snow;
+      r = lerp(r, 0.96, sw);
+      g = lerp(g, 0.975, sw);
+      b = lerp(b, 1.0, sw);
+    }
+
+    // ---------- 山脊高光（fake rim light） ----------
+    // 法线越水平（ny 越小，= 越陡），高光越强
+    const steep = 1 - ny;  // 0=平地，1=垂直崖壁
+    // 高光颜色：雪峰上偏暖（夕阳金顶），低海拔偏白
+    let hiR, hiG, hiB;
+    if (snow > 0.5) {
+      // 雪顶高光：暖白，让夕阳下雪顶发金
+      hiR = 1.0; hiG = 0.96; hiB = 0.92;
+    } else {
+      // 普通山脊高光：冷灰白
+      hiR = 0.9; hiG = 0.93; hiB = 0.98;
+    }
+    const hiStrength = steep * steep * 0.18;  // 只在很陡的地方亮
+    r = lerp(r, hiR, hiStrength);
+    g = lerp(g, hiG, hiStrength);
+    b = lerp(b, hiB, hiStrength);
+
+    arr[i] = r;
+    arr[i + 1] = g;
+    arr[i + 2] = b;
+  }
+  terrainGeo.attributes.color.needsUpdate = true;
 }
 
 /* ---------------- 8. 风 / 光照统一 uniform ---------------- */
@@ -1003,6 +1187,8 @@ const grassFragment = /* glsl */ `
 
 const grassCardFragment = /* glsl */ `
   uniform sampler2D uMap;
+  uniform vec3 uSeasonTint;
+  uniform float uSnow;
   ${LIGHT_GLSL}
   ${SHADOW_GLSL}
 
@@ -1034,6 +1220,10 @@ const grassCardFragment = /* glsl */ `
     col += vColor * tex.rgb * uSunColor * back * (0.18 + 0.82 * vH) * 0.7 * uSunI * sh;
 
     col *= mix(vec3(0.93, 0.94, 0.92), vec3(1.16, 1.05, 0.80), clamp(vH, 0.0, 1.0));
+
+    // 四季：整片草地换调子；雪压草尖
+    col *= uSeasonTint;
+    col = mix(col, vec3(0.93, 0.95, 0.98), uSnow * clamp(vH + 0.3, 0.0, 1.0));
 
     float fogF = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
     col = mix(col, uFogColor, fogF);
@@ -1109,7 +1299,12 @@ const flowerFragment = /* glsl */ `
 `;
 
 const grassCardMaterial = new THREE.ShaderMaterial({
-  uniforms: { ...sharedUniforms, uMap: { value: makeGrassTexture() } },
+  uniforms: {
+    ...sharedUniforms,
+    uMap: { value: makeGrassTexture() },
+    uSeasonTint: { value: new THREE.Color(1, 1, 1) },
+    uSnow: { value: 0 },
+  },
   vertexShader: grassVertex,
   fragmentShader: grassCardFragment,
   side: THREE.DoubleSide,
@@ -1205,7 +1400,7 @@ function makeFlowerHeadGeometry() {
 }
 
 /* ---------------- 10. 区块化草原 ---------------- */
-const CHUNK = 26;
+const CHUNK = 30;
 const RINGS = 4;
 const tuftGeoBase = makeGrassCardGeometry(3, 3);
 const stemGeoBase = makeStemGeometry();
@@ -1252,9 +1447,10 @@ function buildChunk(cx, cz, ring) {
   const baseZ = cz * CHUNK;
 
   // 密度必须平缓下降，断崖式降级会在草地上切出一道道缝
-  const tuftCount = ringCount(ring, [3800, 3400, 2600, 1700, 850]);
+  // 区块 26→30，按面积把近景密度补回来
+  const tuftCount = ringCount(ring, [5000, 4400, 3400, 2200, 1100]);
   // 真实草原是草的海洋，花只是点缀
-  const flowerCount = ringCount(ring, [430, 400, 310, 180, 70]);
+  const flowerCount = ringCount(ring, [560, 520, 400, 240, 100]);
 
   /* 草 */
   const tuftGeo = tuftGeoBase.clone();
@@ -1482,9 +1678,9 @@ const treeCrowns = [];
   spots.push({ x: -54, z: -22, s: 1.2 });
   spots.push({ x: 66, z: -18, s: 1.35 });
 
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 170; i++) {
     const a = treeRnd() * TAU;
-    const r = 40 + treeRnd() * 128;
+    const r = 40 + treeRnd() * 470;
     const x = Math.cos(a) * r;
     const z = Math.sin(a) * r;
     const ld = lakeDist(x, z);
@@ -1578,7 +1774,59 @@ const treeCrowns = [];
     scene.add(tree);
 
     treeColliders.push({ cx: sp.x, cz: sp.z, cos: 1, sin: 0, hx: 0.85 * sp.s, hz: 0.85 * sp.s });
-    treeCrowns.push({ x: sp.x, z: sp.z, r: 4.0 * sp.s, crown });
+    treeCrowns.push({ x: sp.x, z: sp.z, r: 4.0 * sp.s, crown, leafMat, hue: 0.235 + treeRnd() * 0.045, light: 0.26 + treeRnd() * 0.09 });
+  }
+}
+
+/* 对岸森林的四季色（InstancedMesh 的 instanceColor 重写） */
+function applySeasonForest(season, seasonT, snowCover) {
+  if (!forestCrowns || !forestBase.length) return;
+  const c = new THREE.Color();
+  const white = new THREE.Color(0xe8ecf0);
+  for (let i = 0; i < forestBase.length; i++) {
+    const b = forestBase[i];
+    if (season === 0) {
+      c.setHSL(b.h - 0.03, b.s * 0.85, b.l * 1.5);
+    } else if (season === 1) {
+      c.setHSL(b.h, b.s, b.l);
+    } else if (season === 2) {
+      const gold = hash2(i * 7.3, i * 3.1);
+      const warm = 0.75 + seasonT * 0.25;
+      c.setHSL(0.05 + gold * 0.06, 0.6 + gold * 0.2, (0.3 + gold * 0.16) * warm);
+    } else {
+      c.setHSL(0.07, 0.1, b.l * 1.1);
+      if (snowCover > 0.02) c.lerp(white, snowCover * 0.5);
+    }
+    forestCrowns.setColorAt(i, c);
+  }
+  forestCrowns.instanceColor.needsUpdate = true;
+}
+
+/* 四季落在树上：春嫩夏浓秋金冬枯，冬天一半树落光叶子、下雪则挂白 */
+function applySeasonTrees(season, seasonT, snowCover) {
+  for (const tc of treeCrowns) {
+    const leaf = tc.leafMat;
+    if (season === 0) {
+      leaf.color.setHSL(0.21 + tc.hue * 0.2, 0.36, 0.30 + tc.light * 0.35, THREE.SRGBColorSpace);
+    } else if (season === 1) {
+      leaf.color.setHSL(0.235 + tc.hue * 0.3, 0.35, 0.26 + tc.light * 0.6, THREE.SRGBColorSpace);
+    } else if (season === 2) {
+      // 秋：整片染金，绿→金→红的进度由每棵树自己的种子决定，错落才好看
+      const gold = hash2(tc.x * 1.3, tc.z * 1.3);
+      const warm = 0.75 + seasonT * 0.25;
+      leaf.color.setHSL(0.045 + gold * 0.085, 0.62 + gold * 0.22, (0.4 + gold * 0.15) * warm, THREE.SRGBColorSpace);
+    } else {
+      // 冬：枯棕；落光叶子的树只剩枝
+      leaf.color.setHSL(0.08, 0.22, 0.28 + tc.light * 0.2, THREE.SRGBColorSpace);
+      tc.winterBare = hash2(tc.x * 5.1, tc.z * 5.1) <= 0.42;
+    }
+    if (season !== 3) tc.winterBare = false;
+    // 雪挂树冠
+    if (snowCover > 0.02) {
+      const c = leaf.color;
+      const snow = snowCover * 0.75;
+      c.lerp(new THREE.Color(0xe9edf2), snow);
+    }
   }
 }
 
@@ -1630,6 +1878,8 @@ const treeCrowns = [];
 const places = createPlaces(scene, null);
 
 /* ---------------- 12.6 对岸森林与远处灯火 ---------------- */
+let forestCrowns = null;
+let forestBase = [];
 {
   const rnd = mulberry32(5522);
   const crownGeo = new THREE.IcosahedronGeometry(1, 1);
@@ -1674,6 +1924,7 @@ const places = createPlaces(scene, null);
       crowns.setMatrixAt(n, d.matrix);
       col.setHSL(0.27 + rnd() * 0.05, 0.24 + rnd() * 0.18, 0.1 + rnd() * 0.07);
       crowns.setColorAt(n, col);
+      forestBase.push({ h: 0.27 + rnd() * 0.05, s: 0.24 + rnd() * 0.18, l: 0.1 + rnd() * 0.07 });
       n++;
     }
   }
@@ -1681,6 +1932,7 @@ const places = createPlaces(scene, null);
   crowns.count = n;
   crowns.instanceColor.needsUpdate = true;
   scene.add(crowns);
+  forestCrowns = crowns;
 }
 
 {
@@ -1903,6 +2155,79 @@ let lieAmount = 0;
 let lying = false;
 let savedPitch = 0;
 
+/* 跳跃：edge-triggered，空中 camY = 起跳地面 + 眼高 + jumpOffset */
+let jumpVy = 0;         // 垂直速度（正向上）
+let jumpOffset = 0;     // 相对起跳地面的高度偏移（0=地面）
+let jumpFloorY = 0;     // 起跳瞬间锁定的地面高度（空中不随地形变）
+let jumpQueued = false; // 用于 edge-trigger
+const JUMP_V0 = 5.8;    // 初速度 m/s（跳起约 1.2m 高）
+const JUMP_G = 14;      // 重力 m/s²
+
+/* 第三人称 */
+let thirdPerson = false;
+let tpCam = null;   // 第三人称相机平滑位置 {x,y,z}
+let avatar = null;  // 玩家小木人
+
+function buildAvatar() {
+  const g = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a3a, roughness: 0.8 });
+  const cloth = new THREE.MeshStandardMaterial({ color: 0x4a6b4a, roughness: 0.9 });
+  const skin = new THREE.MeshStandardMaterial({ color: 0xe8c8a0, roughness: 0.8 });
+  const hatM = new THREE.MeshStandardMaterial({ color: 0xd4b06a, roughness: 0.9 });
+  const shoeM = new THREE.MeshStandardMaterial({ color: 0x3a2a1a, roughness: 0.9 });
+  const beltM = new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.9 });
+  const scarf = new THREE.MeshStandardMaterial({ color: 0xb84a3a, roughness: 0.9 });
+
+  const box = (w, h, d, m, x, y, z, parent) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    (parent || g).add(mesh);
+    return mesh;
+  };
+
+  // 腿（pivot 在髋部）
+  const legL = new THREE.Group(); legL.position.set(-0.09, 0.8, 0);
+  const legR = new THREE.Group(); legR.position.set(0.09, 0.8, 0);
+  box(0.1, 0.44, 0.11, wood, 0, -0.22, 0, legL);
+  box(0.1, 0.44, 0.11, wood, 0, -0.22, 0, legR);
+  box(0.11, 0.09, 0.19, shoeM, 0, -0.47, 0.02, legL);
+  box(0.11, 0.09, 0.19, shoeM, 0, -0.47, 0.02, legR);
+  g.add(legL, legR);
+
+  // 身体 + 腰带 + 红领巾（本地 -z 是前进方向，领巾在胸前）
+  box(0.36, 0.52, 0.22, cloth, 0, 1.04, 0);
+  box(0.37, 0.07, 0.23, beltM, 0, 0.84, 0);
+  box(0.16, 0.2, 0.04, scarf, 0, 1.2, -0.12);
+
+  // 胳膊（pivot 在肩）
+  const armL = new THREE.Group(); armL.position.set(-0.23, 1.22, 0);
+  const armR = new THREE.Group(); armR.position.set(0.23, 1.22, 0);
+  box(0.09, 0.44, 0.1, cloth, 0, -0.2, 0, armL);
+  box(0.09, 0.44, 0.1, cloth, 0, -0.2, 0, armR);
+  box(0.08, 0.09, 0.09, skin, 0, -0.45, 0, armL);
+  box(0.08, 0.09, 0.09, skin, 0, -0.45, 0, armR);
+  g.add(armL, armR);
+
+  // 头 + 草帽
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 10), skin);
+  head.position.set(0, 1.44, 0);
+  head.castShadow = true;
+  g.add(head);
+  const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.3, 0.05, 12), hatM);
+  hat.position.set(0, 1.55, 0);
+  hat.castShadow = true;
+  g.add(hat);
+  const hatTop = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.1, 12), hatM);
+  hatTop.position.set(0, 1.62, 0);
+  hatTop.castShadow = true;
+  g.add(hatTop);
+
+  g.visible = false;
+  scene.add(g);
+  avatar = { g, legL, legR, armL, armR };
+}
+
 /* 出生点朝向湖 */
 {
   const dx = LAKE.x - 0;
@@ -1933,9 +2258,10 @@ const DEFAULT_BINDS = {
   left: 'KeyA',
   right: 'KeyD',
   run: 'ShiftLeft',
+  jump: 'Space',
 };
 const BIND_LABELS = {
-  forward: '前进', back: '后退', left: '左移', right: '右移', run: '快走',
+  forward: '前进', back: '后退', left: '左移', right: '右移', run: '快走', jump: '跳跃',
 };
 const binds = { ...DEFAULT_BINDS };
 try {
@@ -1970,7 +2296,7 @@ function refreshKeyHint() {
   const b = binds;
   keysEl.textContent =
     `${codeLabel(b.forward)} ${codeLabel(b.left)} ${codeLabel(b.back)} ${codeLabel(b.right)} 走` +
-    ` · ${codeLabel(b.run)} 快走 · F 躺下 · T 换时辰 · M 声音 · H 净屏 · Esc 菜单`;
+    ` · ${codeLabel(b.run)} 快走 · F 躺下 · V 视角 · T 换时辰 · M 声音 · H 净屏 · Esc 菜单`;
 }
 
 let toastTimer = 0;
@@ -2048,6 +2374,83 @@ document.getElementById('btn-quit').addEventListener('click', (e) => {
   e.stopPropagation();
   quitToTitle();
 });
+
+/* ---- 季节设置面板 ---- */
+document.getElementById('btn-season').addEventListener('click', (e) => {
+  e.stopPropagation();
+  showPanel('season');
+  refreshSeasonPanel();
+});
+
+function refreshSeasonPanel() {
+  // 季节按钮高亮
+  document.querySelectorAll('.season-btn').forEach((b) => {
+    const s = +b.dataset.season;
+    b.classList.toggle('active', calendar.season === s);
+  });
+  // 天气按钮高亮
+  document.querySelectorAll('.weather-btn').forEach((b) => {
+    b.classList.toggle('active', weather.type === b.dataset.wx);
+  });
+  // 速度 slider + 显示
+  const yr = document.getElementById('yearsec');
+  const yrVal = document.getElementById('yearsec-val');
+  if (yr) { yr.value = Math.round(yearSec); }
+  if (yrVal) { yrVal.textContent = formatYearSec(yearSec); }
+}
+
+function formatYearSec(s) {
+  if (s < 120) return `${Math.round(s)} 秒 / 年（快速）`;
+  if (s < 3600) return `${Math.round(s / 60)} 分钟 / 年`;
+  const h = s / 3600;
+  if (Math.abs(h - 1) < 0.01) return '1 小时 / 年（默认）';
+  return `${h.toFixed(h % 1 < 0.1 ? 0 : 1)} 小时 / 年（缓慢）`;
+}
+
+/* 季节按钮 */
+document.querySelectorAll('.season-btn').forEach((b) => {
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const s = +b.dataset.season;
+    window.__setSeason(s);
+    refreshSeasonPanel();
+    toast(`切换到 ${['春', '夏', '秋', '冬'][s]} 季`);
+  });
+});
+
+/* 天气按钮 */
+document.querySelectorAll('.weather-btn').forEach((b) => {
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    weather.force(b.dataset.wx);
+    refreshSeasonPanel();
+    const names = { clear: '晴', cloudy: '多云', overcast: '阴', rain: '雨', storm: '雷雨', snow: '雪', fog: '雾' };
+    toast(`切换到 ${names[b.dataset.wx]}`);
+  });
+});
+
+/* 轮转速度 slider */
+{
+  const yr = document.getElementById('yearsec');
+  const yrVal = document.getElementById('yearsec-val');
+  if (yr) {
+    yr.addEventListener('input', () => {
+      yearSec = +yr.value;
+      if (yrVal) yrVal.textContent = formatYearSec(yearSec);
+    });
+    yr.addEventListener('change', () => {
+      yearSec = +yr.value;
+      toast('四季轮转速度已更新');
+    });
+  }
+}
+
+/* 每次打开暂停面板时刷新季节高亮 */
+const origShowPanel = showPanel;
+showPanel = function(name) {
+  origShowPanel(name);
+  if (name === 'season') refreshSeasonPanel();
+};
 
 document.querySelectorAll('[data-back]').forEach((btn) => {
   btn.addEventListener('click', (e) => {
@@ -2160,6 +2563,16 @@ document.getElementById('enter').addEventListener('click', (e) => {
 });
 introEl.addEventListener('click', startGame);
 
+// 调试 / 截图：?still 直接进场，?x/?z/?yaw 定位，?hour 定点时辰
+if (QS.has('still')) {
+  if (QS.has('x')) player.x = parseFloat(QS.get('x'));
+  if (QS.has('z')) player.z = parseFloat(QS.get('z'));
+  if (QS.has('yaw')) player.yaw = parseFloat(QS.get('yaw'));
+  if (QS.has('pitch')) player.pitch = parseFloat(QS.get('pitch'));
+  if (QS.has('hour')) hour = parseFloat(QS.get('hour'));
+  startGame();
+}
+
 canvas.addEventListener('mousedown', () => {
   if (started && dragMode) dragging = true;
 });
@@ -2217,6 +2630,10 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') toggleLie();
   if (e.code === 'KeyT') skipTime();
   if (e.code === 'KeyM') toggleMute();
+  if (e.code === 'KeyV') {
+    thirdPerson = !thirdPerson;
+    toast(thirdPerson ? '第三人称 · 再按 V 切回' : '第一人称');
+  }
   if (e.code === 'KeyH') body.classList.toggle('clean');
 });
 
@@ -2241,7 +2658,9 @@ let muted = false;
 let music = null;
 let windGain = null;
 let waterGain = null;
+let rainGain = null;
 let currentIndoor = 0;
+let thunderFlash = 0;
 
 function initAudio() {
   if (audioCtx) {
@@ -2308,11 +2727,59 @@ function initAudio() {
   waterSrc.connect(wbp).connect(waterGain).connect(masterGain);
   waterSrc.start();
 
+  // 雨声：白噪声 + 低通，随雨势起落
+  const rlen = audioCtx.sampleRate * 3;
+  const rbuf = audioCtx.createBuffer(1, rlen, audioCtx.sampleRate);
+  const rd = rbuf.getChannelData(0);
+  let l3 = 0;
+  for (let i = 0; i < rlen; i++) {
+    const white = Math.random() * 2 - 1;
+    l3 = (l3 + 0.03 * white) / 1.03;
+    rd[i] = l3 * 1.6 + white * 0.22;
+  }
+  const rainSrc = audioCtx.createBufferSource();
+  rainSrc.buffer = rbuf;
+  rainSrc.loop = true;
+  const rlp = audioCtx.createBiquadFilter();
+  rlp.type = 'lowpass';
+  rlp.frequency.value = 1050;
+  rlp.Q.value = 0.35;
+  rainGain = audioCtx.createGain();
+  rainGain.gain.value = 0;
+  rainSrc.connect(rlp).connect(rainGain).connect(masterGain);
+  rainSrc.start();
+
   music = createMusic(audioCtx, masterGain);
   music.start();
 
   scheduleBirds();
   scheduleCrickets();
+}
+
+/* 雷：低频噪声滚过去，配一道天光 */
+function thunder() {
+  if (!audioCtx || muted) return;
+  thunderFlash = 1;
+  const t0 = audioCtx.currentTime;
+  const len = Math.floor(audioCtx.sampleRate * 2.4);
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    const white = Math.random() * 2 - 1;
+    last = (last + 0.16 * white) / 1.16;
+    d[i] = last * Math.exp(-i / (len * 0.2)) * 2.8;
+  }
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  const lp = audioCtx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(560, t0);
+  lp.frequency.exponentialRampToValueAtTime(80, t0 + 2.2);
+  const g = audioCtx.createGain();
+  g.gain.value = 0.85;
+  src.connect(lp).connect(g).connect(masterGain);
+  src.start();
 }
 
 function chirp() {
@@ -2451,6 +2918,78 @@ function updateWorld(t, dt) {
   sharedUniforms.uTime.value = t;
   sharedUniforms.uWind.value = 0.8 + Math.sin(t * 0.12) * 0.24 + Math.sin(t * 0.35) * 0.09;
 
+  /* ---- 季节与天气 ---- */
+  calendar = computeCalendar(t + yearOffset, yearSec);
+  weather.update(dt, calendar.season, camera.position.x, camera.position.y, camera.position.z);
+  const wx = weather.state;
+  const fest = calendar.mainFestival;
+  const deco = fest ? fest.deco : '';
+
+  // 节日改变天气口味：清明雨雾、冬至多雪
+  const b = weather.bias;
+  b[0] = 1; b[1] = 1; b[2] = 1; b[3] = 1; b[4] = 1; b[5] = 1; b[6] = 1;
+  if (deco === 'mist') { b[3] = 2.2; b[6] = 2.6; }
+  if (deco === 'snow' || calendar.season === 3) b[5] = 2.2;
+
+  // 积雪缓慢积累 / 消融
+  snowCover += (wx.snow * (calendar.season === 3 ? 2.0 : 1.0) - snowCover * 0.12) * dt * 0.8;
+  snowCover = clamp(snowCover, 0, 1);
+
+  // 季节重染地形与树（节流：半秒一次，禁止 snowCover 差值触发——那会导致下雪天每帧全量刷闪屏）
+  seasonClock += dt;
+  if (seasonClock > 0.5 || calendar.season !== lastAppliedSeason) {
+    seasonClock = 0;
+    lastAppliedSnow = snowCover;
+    lastAppliedSeason = calendar.season;
+    applySeasonTerrain(calendar.season, calendar.seasonT, snowCover);
+    applySeasonTrees(calendar.season, calendar.seasonT, snowCover);
+    applySeasonForest(calendar.season, calendar.seasonT, snowCover);
+    const tint = SEASON_TINT[calendar.season];
+    grassCardMaterial.uniforms.uSeasonTint.value.set(tint.r, tint.g, tint.b);
+    // 冬季草地雪更明显；非冬季下雪也有临时雪（慢慢化）
+    grassCardMaterial.uniforms.uSnow.value = snowCover * (calendar.season === 3 ? 1.3 : 0.5);
+  }
+
+  // 花粉随季节，清明变柳絮（白）
+  pollenMat.opacity = 0.5 * POLLEN_SEASON[calendar.season];
+  pollenMat.color.set(deco === 'mist' ? 0xf4f6f0 : 0xfff4d6);
+
+  // 节日装饰
+  const fw = places.festival;
+  fw.lanterns.visible = deco === 'spring' || deco === 'lantern' || deco === 'snow' || deco === 'smoke';
+  fw.couplets.visible = deco === 'spring';
+  fw.dragonBoat.visible = deco === 'boat';
+  fw.mugwort.visible = deco === 'boat';
+  fw.chrys.visible = deco === 'chrys';
+  fw.skyOn = deco === 'lanterns';
+  fw.enabled = deco === 'spring' || deco === 'lantern' || deco === 'smoke';
+  fw.root.visible = !!fest;
+  fw.update(t, dt, nightAmount);
+
+  // 中秋月更圆更亮，七夕星河更密
+  skyUniforms.uMoonBoost.value = deco === 'lanterns' ? fest.fade : 0;
+  skyUniforms.uStarBoost.value = deco === 'star' ? fest.fade : 0;
+
+  // 雨打湖面：细碎的小涟漪
+  if (wx.rain > 0.25 && Math.random() < wx.rain * 0.7) {
+    const ripples = places.water.ripples;
+    const i = (Math.random() * ripples.length) | 0;
+    const a = Math.random() * TAU;
+    const r = Math.sqrt(Math.random()) * LAKE.r * 0.92;
+    ripples[i].set(LAKE.x + Math.cos(a) * r, LAKE.z + Math.sin(a) * r * 0.92, t, 0.22);
+  }
+
+  // 雷
+  thunderFlash = Math.max(0, thunderFlash - dt * 1.4);
+  if (wx.rain > 0.82 && Math.random() < dt / 30) thunder();
+
+  // 天气 HUD（节流）
+  hudClock += dt;
+  if (hudClock > 0.4) {
+    hudClock = 0;
+    updateWeatherHud();
+  }
+
   // 阴影矩阵
   const shadowMap = sunLight.shadow.map;
   sharedUniforms.uShadowMap.value = NO_SHADOW || !shadowMap ? whitePixel : shadowMap.texture;
@@ -2515,28 +3054,42 @@ function updateWorld(t, dt) {
     const flap = 0.5 + Math.abs(Math.sin(t * b.flap + b.ph)) * 0.6;
     b.sprite.scale.set(b.baseScale * flap, b.baseScale, 1);
     b.sprite.material.rotation = Math.sin(t * 0.6 + b.ph) * 0.25;
-    b.sprite.material.opacity = 0.95 * (1 - nightAmount);
+    b.sprite.material.opacity = 0.95 * (1 - nightAmount) * (calendar.season < 2 ? 1 : 0);
   }
 
   updateFireflies(t, dt);
 
-  // 走近树就把树冠收起来，避免镜头被一团绿糊住
+  // 走近树就把树冠收起来，避免镜头被一团绿糊住（冬季光秃的树本来就没有树冠）
   for (const tc of treeCrowns) {
     const dx = camera.position.x - tc.x;
     const dz = camera.position.z - tc.z;
-    tc.crown.visible = dx * dx + dz * dz > 25;
+    tc.crown.visible = dx * dx + dz * dz > 25 && !tc.winterBare;
   }
   if (window.__lakeLights) {
     window.__lakeLights.material.opacity = Math.min(0.9, nightAmount * 0.9);
   }
 
   // 地点
-  places.update(t, timeState, SUN_DIR, timeState.sunI, nightAmount);
+  places.update(t, timeState, SUN_DIR, timeState.sunI, nightAmount, MOON_DIR);
+
+  // 壁炉火焰轻微摇摆（查所有 userData.isFire 的 Group）
+  {
+    const walk = (obj) => {
+      if (obj.userData && obj.userData.isFire) {
+        obj.scale.y = 1 + Math.sin(t * 6) * 0.08 + Math.sin(t * 11) * 0.05;
+        obj.position.y = obj.userData.baseY + Math.sin(t * 3.5) * 0.01;
+        obj.rotation.y = Math.sin(t * 2.2) * 0.08;
+      }
+      obj.children.forEach(walk);
+    };
+    walk(scene);
+  }
 
   // 室内 / 水边
   const indoor = places.indoorAt(player.x, player.z);
   currentIndoor += (indoor - currentIndoor) * Math.min(1, dt * 3.5);
-  if (windGain) windGain.gain.setTargetAtTime(lerp(0.16, 0.045, currentIndoor), audioCtx.currentTime, 0.4);
+  if (windGain) windGain.gain.setTargetAtTime(lerp(0.16, 0.045, currentIndoor) * (1 + wx.wind * 0.3 + wx.snow * 0.5 + wx.rain * 0.2), audioCtx.currentTime, 0.4);
+  if (rainGain) rainGain.gain.setTargetAtTime((wx.rain * 0.3 + wx.snow * 0.05) * (1 - currentIndoor * 0.85), audioCtx.currentTime, 0.5);
   if (waterGain) {
     const ld = lakeDist(player.x, player.z);
     const nearWater = clamp(1 - (ld - 1.0) / 0.9, 0, 1);
@@ -2615,9 +3168,9 @@ function updatePlayer(t, dt) {
     }
   }
 
-  // 深水不让进
+  // 深水不让进（但跳跃中跳过）
   const floorInfo = places.floorAt(nx, nz, feetY);
-  const tooDeep = !floorInfo.onDeck && LAKE.level - floorInfo.y > 0.42;
+  const tooDeep = !floorInfo.onDeck && LAKE.level - floorInfo.y > 0.42 && jumpOffset <= 0.01;
   if (!tooDeep) {
     player.x = nx;
     player.z = nz;
@@ -2639,21 +3192,102 @@ function updatePlayer(t, dt) {
   lieAmount += ((lying ? 1 : 0) - lieAmount) * Math.min(1, dt * 3.2);
 
   const eye = lerp(EYE, LIE_EYE, lieAmount);
-  camY = lerp(camY, floorInfo.y + eye, 1 - Math.exp(-dt * 11));
+
+  // 跳跃（edge-triggered）：地面上才允许跳，起跳瞬间锁定 jumpFloorY
+  const curFloor = floorInfo.y;
+  const wasOnGround = jumpOffset <= 0.01 && jumpVy <= 0;
+  const jumpKey = held.has(binds.jump) || held.has('Space');
+  if (jumpKey && !jumpQueued && wasOnGround && !lying) {
+    jumpVy = JUMP_V0;
+    jumpOffset = 0;
+    jumpFloorY = curFloor;
+  }
+  jumpQueued = jumpKey;
+
+  // 重力 + 位移
+  if (jumpOffset > 0 || jumpVy > 0) {
+    jumpVy -= JUMP_G * dt;
+    jumpOffset += jumpVy * dt;
+    // 落地判定：起跳点 + jumpOffset <= 当前地面高度（玩家"落回"任何可站的地方）
+    // 用 curFloor 和 jumpFloorY + jumpOffset 比较，这样能跳到更高的 deck 上
+    const expectedGround = jumpFloorY + jumpOffset;
+    const actualFloor = curFloor;
+    if (jumpVy < 0 && expectedGround <= actualFloor + 0.02) {
+      // 落地：把 jumpOffset 对齐到当前地形（玩家可以跳到更高的地方）
+      jumpOffset = Math.max(0, actualFloor - jumpFloorY);
+      jumpVy = 0;
+    }
+  }
+
+  // camY = 起跳点 + 眼高 + 跳跃偏移（空中时不受下方地形影响）
+  const targetCamY = jumpOffset > 0.01 || jumpVy > 0
+    ? jumpFloorY + eye + jumpOffset
+    : curFloor + eye;
+  camY = lerp(camY, targetCamY, 1 - Math.exp(-dt * (jumpOffset > 0.01 ? 16 : 11)));
 
   const bobAmt = Math.min(speed / 2.0, 1) * (1 - lieAmount);
   const bobY = Math.sin(player.bob) * 0.021 * bobAmt;
   const bobX = Math.sin(player.bob * 0.5) * 0.011 * bobAmt;
 
-  camera.position.set(
-    player.x + bobX * Math.cos(player.yaw),
-    camY + bobY,
-    player.z - bobX * Math.sin(player.yaw)
-  );
+  // 玩家小木人（第三人称可见）
+  if (!avatar) buildAvatar();
+  if (avatar) {
+    avatar.g.visible = thirdPerson && started;
+    if (avatar.g.visible) {
+      const swing = Math.sin(player.bob) * bobAmt;
+      avatar.legL.rotation.x = swing * 0.6;
+      avatar.legR.rotation.x = -swing * 0.6;
+      avatar.armL.rotation.x = -swing * 0.5;
+      avatar.armR.rotation.x = swing * 0.5;
+      avatar.g.position.set(player.x, (camY - eye) + 0.02, player.z);
+      avatar.g.rotation.y = player.yaw;
+    }
+  }
 
   const roll = Math.sin(player.bob * 0.5) * 0.004 * bobAmt + lieAmount * Math.sin(t * 0.5) * 0.011;
-  camera.rotation.set(player.pitch + lieAmount * 0.06, player.yaw, roll, 'YXZ');
-  camera.position.y += Math.sin(t * 0.7) * 0.0035 * (1 - lieAmount);
+
+  if (thirdPerson) {
+    // 第三人称：相机在身后，看向玩家
+    // 玩家 forward = (-sin(yaw), -cos(yaw))，身后 = player - forward*back
+    const indoorT = places.indoorAt(player.x, player.z) > 0.4;
+    const back = indoorT ? 1.9 : 3.4;
+    let cx = player.x + Math.sin(player.yaw) * back;
+    let cz = player.z + Math.cos(player.yaw) * back;
+    let cy = camY + 0.5 - clamp(player.pitch, -0.6, 0.8) * 1.6;
+
+    // 相机防穿墙：撞到就贴墙并向玩家拉近
+    const res = places.resolve(cx, cz, 0.3, camY - eye);
+    if (Math.hypot(res.x - cx, res.z - cz) > 0.02) {
+      cx = res.x;
+      cz = res.z;
+      const ddx = player.x - cx;
+      const ddz = player.z - cz;
+      const dd = Math.hypot(ddx, ddz) || 1;
+      cx += (ddx / dd) * 0.4;
+      cz += (ddz / dd) * 0.4;
+    }
+    // 不穿地 / 不进水
+    const floorCam = places.floorAt(cx, cz, camY - eye).y;
+    cy = Math.max(cy, floorCam + 0.45);
+    if (lakeDist(cx, cz) < 1) cy = Math.max(cy, LAKE.level + 0.35);
+
+    if (!tpCam) tpCam = { x: cx, y: cy, z: cz };
+    const k = 1 - Math.exp(-dt * 9);
+    tpCam.x += (cx - tpCam.x) * k;
+    tpCam.y += (cy - tpCam.y) * k;
+    tpCam.z += (cz - tpCam.z) * k;
+    camera.position.set(tpCam.x, tpCam.y, tpCam.z);
+    camera.lookAt(player.x, camY - 0.45, player.z);
+  } else {
+    tpCam = null;
+    camera.position.set(
+      player.x + bobX * Math.cos(player.yaw),
+      camY + bobY,
+      player.z - bobX * Math.sin(player.yaw)
+    );
+    camera.rotation.set(player.pitch + lieAmount * 0.06, player.yaw, roll, 'YXZ');
+    camera.position.y += Math.sin(t * 0.7) * 0.0035 * (1 - lieAmount);
+  }
 
   ensureChunks(player.x, player.z);
 }
@@ -2681,7 +3315,8 @@ const reflectMatrix = new THREE.Matrix4();
 
 function resizeReflection() {
   renderer.getDrawingBufferSize(reflectSize);
-  const scale = 0.62;
+  // 高分屏上死守 0.62 会让反射贴图比屏幕还贵：限制到约 1200 宽，远处看不出差别
+  const scale = clamp(1200 / Math.max(reflectSize.x, 1), 0.4, 0.62);
   reflectRT.setSize(
     Math.max(2, Math.floor(reflectSize.x * scale)),
     Math.max(2, Math.floor(reflectSize.y * scale))
@@ -2691,8 +3326,26 @@ function resizeReflection() {
 resizeReflection();
 places.water.uniforms.uReflection.value = reflectRT.texture;
 
+const reflectForward = new THREE.Vector3();
+const reflectToLake = new THREE.Vector3();
+
 function renderReflection() {
-  if (camera.position.y <= LAKE.level + 0.05) return;
+  const u = places.water.uniforms;
+  const toLake = reflectToLake.set(LAKE.x - camera.position.x, 0, LAKE.z - camera.position.z);
+  const lakeDistNow = toLake.length();
+  if (lakeDistNow > 0.001) toLake.multiplyScalar(1 / lakeDistNow);
+  camera.getWorldDirection(reflectForward);
+
+  // 湖在身后、或者远到只剩一条线时，整个反射 pass 都可以省掉，退回解析天空
+  if (
+    camera.position.y <= LAKE.level + 0.05 ||
+    lakeDistNow > 185 ||
+    (lakeDistNow > 62 && toLake.dot(reflectForward) < -0.12)
+  ) {
+    u.uReflValid.value = 0;
+    return;
+  }
+  u.uReflValid.value = 1;
 
   mirrorCam.fov = camera.fov;
   mirrorCam.aspect = camera.aspect;
@@ -2744,7 +3397,8 @@ let fpsFrames = 0;
 
 function animate(now) {
   requestAnimationFrame(animate);
-  const dt = Math.min((now - lastFrame) / 1000, 0.05);
+  // RAF 时间戳与 performance.now 可能不同源（部分无头环境），dt 必须夹在 [0, 0.05]
+  const dt = Math.max(0, Math.min((now - lastFrame) / 1000, 0.05));
   lastFrame = now;
   elapsed += dt;
 
@@ -2773,6 +3427,53 @@ applyTime();
 rebuildEnv();
 requestAnimationFrame(animate);
 
+// 调试：把历法拨到某个季节 / 节气日 / 天气
+window.__setSeason = (s) => {
+  const doy = [75, 170, 260, 350][clamp(s | 0, 0, 3)];
+  yearOffset = (doy / 365.25) * yearSec - elapsed;
+};
+window.__setDoy = (d) => {
+  yearOffset = (parseFloat(d) / 365.25) * yearSec - elapsed;
+};
+window.__cal = () => calendar;
+window.__weather = () => weather;
+window.__probe = () => JSON.stringify({
+  cam: camera.position.toArray().map((v) => +v.toFixed(2)),
+  yaw: +player.yaw.toFixed(3),
+  pitch: +player.pitch.toFixed(3),
+  cabin: places.cabin.group.position.toArray().map((v) => +v.toFixed(2)),
+  player: [+player.x.toFixed(2), +player.z.toFixed(2)],
+  festVisible: places.festival.root.visible,
+  lanterns: places.festival.lanterns.visible,
+  couplets: places.festival.couplets.visible,
+  lanternPos: (() => {
+    const l = places.festival.lanterns.children;
+    return l.map((c) => c.position.toArray().map((v) => +v.toFixed(1)));
+  })(),
+  coupletPos: (() => {
+    const c = places.festival.couplets.children;
+    return c.slice(0, 3).map((m) => m.position.toArray().map((v) => +v.toFixed(1)));
+  })(),
+  fireOp: +places.festival.fwMat.opacity.toFixed(2),
+  night: +nightAmount.toFixed(2),
+  floorAt: JSON.stringify(places.floorAt(player.x, player.z)),
+  camY: +camY.toFixed(2),
+});
+window.__dbg = () => {
+  const tc = treeCrowns[0];
+  return JSON.stringify({
+    trees: treeCrowns.length,
+    leaf: tc ? '#' + tc.leafMat.color.getHexString() : 'none',
+    season: calendar.season,
+    tint: '#' + grassCardMaterial.uniforms.uSeasonTint.value.getHexString(),
+    snow: +grassCardMaterial.uniforms.uSnow.value.toFixed(3),
+    snowVis: weather.snowObj.visible,
+    snowOp: +weather.snowObj.material.opacity.toFixed(2),
+    rainVis: weather.rainObj.visible,
+    wx: weather.state,
+  });
+};
+
 // 调试用：?still 直接站进世界，跳过开场与 HUD
 if (new URLSearchParams(location.search).has('still')) {  started = true;
   body.classList.add('started', 'clean');
@@ -2783,9 +3484,15 @@ if (new URLSearchParams(location.search).has('still')) {  started = true;
   if (p.has('z')) player.z = parseFloat(p.get('z'));
   if (p.has('yaw')) player.yaw = parseFloat(p.get('yaw'));
   if (p.has('pitch')) player.pitch = parseFloat(p.get('pitch'));
+  if (p.has('season')) window.__setSeason(parseInt(p.get('season')));
+  if (p.has('doy')) window.__setDoy(parseFloat(p.get('doy')));
+  if (p.has('weather')) weather.force(p.get('weather'));
+  if (p.has('snow')) snowCover = clamp(parseFloat(p.get('snow')), 0, 1);
   applyTime();
   camY = places.floorAt(player.x, player.z).y + EYE;
   if (p.has('f1')) camY = places.cabin.floorY + EYE;
+  if (p.has('camh')) camY = parseFloat(p.get('camh'));
+  if (p.has('tp')) thirdPerson = p.get('tp') !== '0';
   // 调试用：?menu 直接打开设置菜单，?panel=keys|world 直达子面板
   if (p.has('menu')) {
     setTimeout(() => openMenu(), 900);
