@@ -26,10 +26,23 @@ const FLOWER_ROAD = [
   [4.5, 142.0],
   [1.5, 206.0],
   [0.0, 262.0],
+  [8.0, 330.0],
+  [14.0, 400.0],
+  [10.0, 470.0],
+  [0.0, 540.0],
+  [-10.0, 610.0],
+  [-14.0, 690.0],
+  [-8.0, 770.0],
+  [2.0, 850.0],
+  [12.0, 930.0],
+  [16.0, 1010.0],
+  [10.0, 1090.0],
+  [0.0, 1170.0],
+  [0.0, 1260.0],
 ];
 
 function flowerRoadFactor(x, z) {
-  if (z < -24 || z > 290) return 0;
+  if (z < -24 || z > 1275) return 0;
   let best = 1e9;
   let hitZ = z;
   for (let i = 0; i < FLOWER_ROAD.length - 1; i++) {
@@ -50,9 +63,9 @@ function flowerRoadFactor(x, z) {
     }
   }
   // 越靠近雪山越宽：山脚下摊成一整片海
-  const along = clamp((hitZ + 15) / 277, 0, 1);
+  const along = clamp((hitZ + 15) / 1290, 0, 1);
   const wobble = (valueNoise(x * 0.031 + 17.3, z * 0.031 - 6.1) - 0.5) * 12;
-  const halfW = 6.5 + along * 30 + wobble;
+  const halfW = 6.5 + along * 48 + wobble;
   return smoothstep(halfW, halfW * 0.52, best);
 }
 
@@ -111,7 +124,7 @@ const scene = new THREE.Scene();
 const FOG_COLOR = 0xd9dfc4;
 scene.fog = new THREE.FogExp2(FOG_COLOR, 0.0044);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2600);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 3400);
 camera.rotation.order = 'YXZ';
 
 const SUN_DIR = new THREE.Vector3(0.38, 0.54, 0.75).normalize();
@@ -295,7 +308,7 @@ const skyVert = /* glsl */ `
 `;
 
 const skyMesh = new THREE.Mesh(
-  new THREE.SphereGeometry(2000, 48, 28),
+  new THREE.SphereGeometry(3300, 48, 28),
   new THREE.ShaderMaterial({
     uniforms: skyUniforms,
     side: THREE.BackSide,
@@ -1102,7 +1115,7 @@ function makePathTexture() {
 let terrainMesh = null;
 {
   const SIZE = WORLD.terrainSize;
-  const SEG = 440;
+  const SEG = 700;
   const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
   geo.rotateX(-Math.PI / 2);
 
@@ -1133,6 +1146,11 @@ let terrainMesh = null;
   const grassDry = new THREE.Color(0xcbbf83);
   const trail = new THREE.Color(0x9c8258);
   const hillTone = new THREE.Color(0x969a70);
+  // 地形放大后，颜色要跟着地势分：坡上晒得干、谷底更润，
+  // 再叠一层大尺度的枯荣斑块 —— 否则两公里看过去还是同一张绿纸
+  const highTone = new THREE.Color(0xbdb079);
+  const lushTone = new THREE.Color(0x7c8f45);
+  const farGrass = new THREE.Color(0x9aa46a);
 
   // 花海的底色：一片粉、一片白、一片红，远处先看见的是这些色块
   const seaFloor = new THREE.Color(0x6f7f3f);
@@ -1159,10 +1177,21 @@ let terrainMesh = null;
       col.lerp(trail, smoothstep(2.8, 0.8, pd) * 0.42);
     }
 
+    // 大尺度枯荣斑块：一片草原上总有晒黄的坡和还绿着的洼
+    // （强度压低：地面色和草叶色不能拉开太多，否则近看地面像碎裂的补丁）
+    const patch = fbm(x * 0.0021 + 31, z * 0.0021 - 17, 3);
+    col.lerp(grassDry, clamp((patch - 0.55) * 1.6, 0, 1) * 0.16);
+
+    // 地势配色：高处干黄、谷底润绿
+    const alt = smoothstep(8, 52, h);
+    if (alt > 0) col.lerp(highTone, alt * 0.22);
+    const lowland = smoothstep(2, -16, h);
+    if (lowland > 0) col.lerp(lushTone, lowland * 0.35);
+
     // 远处的山脊被草和雾压成灰绿
     const r = Math.hypot(x, z);
     const far = smoothstep(WORLD.hillStart, WORLD.hillFull, r);
-    if (far > 0) col.lerp(hillTone, far * 0.5);
+    if (far > 0) col.lerp(farGrass, far * 0.55);
 
     // 花海：地面先暗成深绿，再被大片同色的花染上颜色
     const sea = seaAt(x, z);
@@ -1268,13 +1297,13 @@ let terrainMesh = null;
    向阳面亮、背阴面暗、山谷发青、山脊挂雪 —— 这些都不是画上去的。 */
 const MTN = {
   x: 0,
-  z0: 815,      // 靠近玩家的这一边：刚好落在地形边缘（z=800）之后
-  w: 3600,
-  d: 1020,
-  segX: 400,
-  segZ: 140,
-  baseY: -90,    // 山脚埋到地平线以下，接缝被前面的丘陵盖住
-  peak: 520,     // 主峰基准高度（米）
+  z0: 1330,     // 靠近玩家的这一边：落在地形边缘（z=1300）之后
+  w: 6400,      // 山脉东西向铺开 6.4 公里，站在草原上左右都望不到头
+  d: 1500,
+  segX: 620,
+  segZ: 220,
+  baseY: -150,  // 山脚埋到地平线以下，接缝被前面的丘陵和雾盖住
+  peak: 760,
 };
 
 /* 一维格点噪声：山脊线沿东西方向的高度靠它 */
@@ -1332,16 +1361,16 @@ function mtnCrest(u) {
    山脊与山脊之间自然会落成山谷 —— 这是锥形山峰做不到的。 */
 const MTN_RIDGES = [
   // [x1, z1, h1, x2, z2, h2, 半宽]
-  [280, 1215, 690, 760, 1250, 300, 430],     // 主峰向东
-  [280, 1215, 690, -200, 1265, 360, 430],    // 主峰向西
-  [280, 1215, 690, 520, 1010, 300, 330],     // 主峰向南（朝观众的一侧）
-  [280, 1215, 690, 60, 1330, 400, 400],      // 主峰向北
-  [-520, 1255, 470, -250, 1300, 340, 330],   // 西侧第二座
-  [-520, 1255, 470, -980, 1260, 280, 360],
-  [-1310, 1245, 320, -1720, 1250, 190, 330],
-  [1150, 1255, 400, 1520, 1245, 230, 350],
-  [1150, 1255, 400, 780, 1300, 260, 300],
-  [-150, 1050, 250, 380, 1030, 205, 330],    // 前面那道矮山肩
+  [280, 1730, 1010, 760, 1775, 440, 580],    // 主峰向东
+  [280, 1730, 1010, -200, 1795, 525, 580],   // 主峰向西
+  [280, 1730, 1010, 520, 1450, 440, 450],    // 主峰向南（朝观众的一侧）
+  [280, 1730, 1010, 60, 1900, 580, 540],     // 主峰向北
+  [-620, 1790, 685, -300, 1855, 495, 450],   // 西侧第二座
+  [-620, 1790, 685, -1120, 1795, 410, 490],
+  [-1560, 1775, 465, -2010, 1780, 275, 450],
+  [1230, 1790, 580, 1640, 1775, 335, 470],
+  [1230, 1790, 580, 830, 1855, 380, 400],
+  [-150, 1560, 365, 420, 1530, 300, 450],    // 前面那道矮山肩
 ];
 
 const mtnUniforms = {
@@ -1420,7 +1449,7 @@ function buildSnowRange() {
     const rid = clamp((mtnRidgeField(x, z) - 0.07) / 0.42, 0, 1);
     ridgeVals[i] = rid;
 
-    const scale = massif / 640;
+    const scale = massif / 940;
     let h = massif * (0.80 + 0.36 * rid);
     h += (fbm(x * 0.0095 + 2.7, z * 0.0095 - 5.3, 4) - 0.5) * 62 * scale;
     h += (fbm(x * 0.0280 - 11.2, z * 0.0280 + 6.6, 3) - 0.5) * 22 * scale;
@@ -1447,13 +1476,13 @@ function buildSnowRange() {
     const z = pos.getZ(i);
     const ny = nrm.getY(i);
 
-    const line = 118 + (fbm(x * 0.0028 - 3.1, z * 0.0028 + 7.4, 3) - 0.5) * 88;
-    let sn = smoothstep(line - 128, line + 120, y);
+    const line = 190 + (fbm(x * 0.0028 - 3.1, z * 0.0028 + 7.4, 3) - 0.5) * 130;
+    let sn = smoothstep(line - 188, line + 176, y);
     sn *= smoothstep(0.10, 0.40, ny);                       // 陡的岩壁挂不住雪
     // 沟里存不住雪：山脊之间的深槽露出深色岩体。
     // 只在雪线附近这么干，峰顶的雪面才干净，不会长出一片脏斑。
     const rockRib = smoothstep(0.04, 0.34, ridgeVals[i]);
-    const lowK = smoothstep(line + 160, line - 50, y);
+    const lowK = smoothstep(line + 235, line - 74, y);
     sn *= 1.0 - (1.0 - rockRib) * lowK;
     sn *= 0.90 + fbm(x * 0.019 + 5.5, z * 0.019 - 9.1, 3) * 0.22;
     snowAttr[i] = clamp(sn, 0, 1);
@@ -1482,7 +1511,7 @@ function buildSnowRange() {
       }
     }
     const avg = wsum > 0 ? sum / wsum : heights[i];
-    aoAttr[i] = clamp(1 + (heights[i] - avg) / 110, 0.42, 1.12);
+    aoAttr[i] = clamp(1 + (heights[i] - avg) / 160, 0.42, 1.12);
   }
 
   geo.setAttribute('aSnow', new THREE.BufferAttribute(snowAttr, 1));
@@ -1587,7 +1616,7 @@ function buildSnowRange() {
         vec3 col = albedo * (amb + direct) * mix(1.0, vAO, aoK);
 
         // 日照金山：太阳压到地平线时，高处的雪还亮着，山下的谷已经沉进阴影
-        float high = smoothstep(150.0, 470.0, vWorld.y);
+        float high = smoothstep(220.0, 690.0, vWorld.y);
         col += uSunColor * uDusk * high * mix(0.30, 0.85, sn) * 0.42;
 
         // 逆光金边：太阳落到山背后时，雪脊上透出一线暖光
@@ -1608,12 +1637,12 @@ function buildSnowRange() {
         // 山脚的雾：颜色必须与地面远处的雾一模一样（就是 uFogColor，不能再乘任何系数），
         // 越贴近山根化得越彻底 —— 山是「从雾里长出来」的，不是被一条亮带切开
         float mistN = vn(vWorld.xz * 0.0075 + 9.0) * 0.62 + vn(vWorld.xz * 0.024 - 3.0) * 0.38;
-        float mistTop = 225.0 + mistN * 165.0;
-        float foot = smoothstep(mistTop, mistTop - 235.0, vWorld.y);
+        float mistTop = 330.0 + mistN * 245.0;
+        float foot = smoothstep(mistTop, mistTop - 345.0, vWorld.y);
         // 雪比岩石更"穿透"雾：雾天里最先看见的总是雪线
         foot *= mix(1.0, 0.72, vSnow);
         // 山根埋在地平线以下（baseY=-90），这一段彻底化进雾里，接缝归零
-        float sink = smoothstep(40.0, -95.0, vWorld.y);
+        float sink = smoothstep(58.0, -150.0, vWorld.y);
         float fogCap = mix(0.90, 1.0, sink);
         col = mix(col, uFogColor, clamp(aerial + foot, 0.0, fogCap));
 
@@ -2166,8 +2195,8 @@ function makeFlowerHeadGeometry() {
 
 /* ---------- 区块化草海 ---------- */
 
-const CHUNK = 30;
-const RINGS = 3;
+const CHUNK = 34;
+const RINGS = 4;
 const tuftGeoBase = makeGrassCardGeometry(3, 3);
 const stemGeoBase = makeStemGeometry();
 const headGeoBase = makeFlowerHeadGeometry();
@@ -2216,10 +2245,11 @@ function buildChunk(cx, cz, ring) {
     seaAt(baseX + CHUNK - 3, baseZ + CHUNK - 3)
   );
 
-  const tuftCount = ringCount(ring, [5000, 4300, 3200, 1800]);
-  const flowerCount = ringCount(ring, [1100, 980, 770, 450]) + Math.round(seaK * 1100);
-  const seedCount = ringCount(ring, [280, 250, 190, 110]);
-  const cloverCount = Math.max(100, ringCount(ring, [830, 750, 590, 350]) - Math.round(seaK * 620));
+  // 区块从 30 加大到 34，密度按面积补回来，近景不能露出太多地皮
+  const tuftCount = ringCount(ring, [6600, 5800, 4800, 3400, 2400]);
+  const flowerCount = ringCount(ring, [1300, 1150, 950, 620, 420]) + Math.round(seaK * 1100);
+  const seedCount = ringCount(ring, [360, 320, 250, 150, 90]);
+  const cloverCount = Math.max(100, ringCount(ring, [1080, 980, 780, 480, 300]) - Math.round(seaK * 620));
 
   /* 草 */
   const tuftGeo = tuftGeoBase.clone();

@@ -120,7 +120,10 @@ export function createTimeOfDay(startHour = 16.4) {
     state.hemiGround.lerpColors(a.cHemiGround, b.cHemiGround, t);
     state.sunI = lerp(a.sunI, b.sunI, t);
     state.hemiI = lerp(a.hemiI, b.hemiI, t) * 1.08;
-    state.fogD = lerp(a.fogD, b.fogD, t) * 0.86;
+    // 雾：地图放大到两公里之后，原来的密度等于把世界关在 300 米以内。
+    // 现在要能看见远处的丘陵和雪山脚下的花道，密度降到三分之一左右，
+    // 只留一层薄纱做空气透视。
+    state.fogD = lerp(a.fogD, b.fogD, t) * 0.34;
     state.expo = lerp(a.expo, b.expo, t) * 1.06;
     state.elev = lerp(a.elev, b.elev, t);
     state.az = lerp(a.az, b.az, t);

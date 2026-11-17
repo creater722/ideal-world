@@ -72,10 +72,10 @@ export function mulberry32(seed) {
 /* ---------------- 世界地理 ---------------- */
 
 export const WORLD = {
-  radius: 250,        // 玩家能走到的边界（没有围栏，只是草地慢慢走远）
-  terrainSize: 1600,  // 地形网格边长
-  hillStart: 320,     // 远山开始抬起的半径
-  hillFull: 760,
+  radius: 1080,       // 玩家能走到的边界：一路能走到雪山脚下
+  terrainSize: 2600,  // 地形网格边长
+  hillStart: 470,     // 外圈山脊开始抬起的半径
+  hillFull: 1120,
 };
 
 /* 农场。坐标写死：地形要在这里压平 */
@@ -108,6 +108,10 @@ export const INNER_PATH_POINTS = [
   [19.6, -35.4],
 ];
 
+/* 花海：草原南面一大片缓坡，整坡都种上花。
+   从出生点沿土路走向农场，越过农场左手边就能看见。 */
+export const FLOWER_SEA = { x: -24, z: -88, r: 34 };
+
 /* 小花海：这几个地方花会明显变密 */
 export const MEADOWS = [
   { x: -9, z: -2, r: 13, k: 1.0 },
@@ -120,21 +124,45 @@ export const MEADOWS = [
   { x: 2, z: 22, r: 10, k: 0.6 },
 ];
 
-/* 地形基础高度：大片缓坡，远处才有淡淡的山 */
+/* 地形基础高度。
+   原来的草原是一层几十厘米的小起伏铺到天边，走两百米和走两公里看到的是同一张图。
+   现在分五层叠：大尺度缓丘（±32m）→ 中尺度坡地 → 通往雪山的谷地 →
+   中远处的脊状丘陵 → 地平线上的一圈远山。 */
 function baseHeight(x, z) {
-  let h = (fbm(x * 0.0036 + 4.2, z * 0.0036 - 2.6, 5) - 0.5) * 17.0;
-  h += (fbm(x * 0.0142 + 8.1, z * 0.0142 + 3.4, 4) - 0.5) * 3.1;
-  h += (fbm(x * 0.052 - 2.1, z * 0.052 + 7.3, 3) - 0.5) * 0.55;
+  // 1) 大尺度地势：八九百米一级的缓丘，走过来是一道道波澜
+  let h = (fbm(x * 0.00115 + 4.2, z * 0.00115 - 2.6, 5) - 0.5) * 64.0;
+  // 2) 中尺度坡地
+  h += (fbm(x * 0.0042 + 8.1, z * 0.0042 + 3.4, 4) - 0.5) * 13.0;
+  // 3) 小起伏与踩下去的手感
+  h += (fbm(x * 0.0190 - 2.1, z * 0.0190 + 7.3, 3) - 0.5) * 2.2;
+  h += (fbm(x * 0.0720 + 1.7, z * 0.0720 - 5.9, 3) - 0.5) * 0.4;
 
-  // 出生点附近轻轻抬起，站上去能看见更远
-  h += 1.15 * Math.exp(-(x * x + z * z) / 1500);
+  // 4) 通往雪山的一条谷地：花道顺着谷底走，两边是抬起来的丘。
+  //    谷底一路压低，远山在这条走廊上让开一个口子 ——
+  //    站在出生点朝北看，视线是顺着这条路一直通到山脚的。
+  const vx = x - Math.sin(z * 0.0018) * 120;
+  const vw = 120 + Math.max(0, z) * 0.075;
+  const valley = Math.exp(-Math.pow(vx / vw, 2)) * smoothstep(-40, 200, z);
 
-  // 很远的地方才有山：低、缓、被雾吃掉一半
+  h -= valley * 12;
+
+  // 5) 出生点附近轻轻抬起，站上去能看见更远
+  h += 2.4 * Math.exp(-(x * x + z * z) / 9000);
+
   const r = Math.hypot(x, z);
+
+  // 6) 中远处的脊状丘陵：草原不是一张饼，走几百米就有一道坡要爬
+  const mid = smoothstep(120, 640, r);
+  if (mid > 0) {
+    const ridge = ridged(x * 0.0019 + 13, z * 0.0019 - 7, 4);
+    h += mid * (ridge - 0.44) * 44.0 * (1 - valley * 0.55);
+  }
+
+  // 7) 外圈远山：地平线上一圈抬起来的山脊，草原才有盆地的味道
   const far = smoothstep(WORLD.hillStart, WORLD.hillFull, r);
   if (far > 0) {
-    const ridge = ridged(x * 0.0024 + 13, z * 0.0024 - 7, 5);
-    h += far * (4.0 + ridge * 46.0);
+    const ridge = ridged(x * 0.0015 + 31, z * 0.0015 - 11, 5);
+    h += far * (8.0 + ridge * 96.0) * (1 - valley * 0.82);
   }
   return h;
 }
@@ -247,3 +275,17 @@ export function meadowBoost(x, z) {
   }
   return k;
 }
+
+/* 花海的边界：圆边用两层噪声打碎，避免看出一个圆盘 */
+export function flowerSeaFactor(x, z) {
+  const dx = x - FLOWER_SEA.x;
+  const dz = z - FLOWER_SEA.z;
+  const d = Math.hypot(dx, dz);
+  if (d > FLOWER_SEA.r * 1.38) return 0;
+  const edge =
+    (valueNoise(x * 0.032 + 17.3, z * 0.032 - 6.1) - 0.5) * 11.0 +
+    (valueNoise(x * 0.093 - 4.7, z * 0.093 + 9.2) - 0.5) * 4.2;
+  const rr = FLOWER_SEA.r + edge;
+  return smoothstep(rr, rr * 0.56, d);
+}
+
