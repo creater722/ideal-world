@@ -20,6 +20,7 @@ import { createHerd } from './grassanimals.js';
    去雪山的路上：一条花海走廊，草在这条带子里让位给花
    --------------------------------------------------------- */
 const FLOWER_ROAD = [
+  [17.2, -22.6],   // 从农场大门出来
   [17.0, -15.0],
   [14.5, 14.0],
   [9.5, 74.0],
@@ -39,10 +40,33 @@ const FLOWER_ROAD = [
   [10.0, 1090.0],
   [0.0, 1170.0],
   [0.0, 1260.0],
+  [-6.0, 1340.0],
+  [4.0, 1420.0],
+  [10.0, 1500.0],
+  [4.0, 1580.0],
+  [0.0, 1650.0],
 ];
 
+/* 到路面中心的距离：地形要沿着这条路染一条土色带 */
+function roadDistance(x, z) {
+  let best = 1e9;
+  for (let i = 0; i < FLOWER_ROAD.length - 1; i++) {
+    const ax = FLOWER_ROAD[i][0];
+    const az = FLOWER_ROAD[i][1];
+    const bx = FLOWER_ROAD[i + 1][0];
+    const bz = FLOWER_ROAD[i + 1][1];
+    const abx = bx - ax;
+    const abz = bz - az;
+    const len2 = abx * abx + abz * abz || 1;
+    const t = clamp(((x - ax) * abx + (z - az) * abz) / len2, 0, 1);
+    const d = Math.hypot(x - (ax + abx * t), z - (az + abz * t));
+    if (d < best) best = d;
+  }
+  return best;
+}
+
 function flowerRoadFactor(x, z) {
-  if (z < -24 || z > 1275) return 0;
+  if (z < -24 || z > 1665) return 0;
   let best = 1e9;
   let hitZ = z;
   for (let i = 0; i < FLOWER_ROAD.length - 1; i++) {
@@ -63,9 +87,9 @@ function flowerRoadFactor(x, z) {
     }
   }
   // 越靠近雪山越宽：山脚下摊成一整片海
-  const along = clamp((hitZ + 15) / 1290, 0, 1);
+  const along = clamp((hitZ + 15) / 1680, 0, 1);
   const wobble = (valueNoise(x * 0.031 + 17.3, z * 0.031 - 6.1) - 0.5) * 12;
-  const halfW = 6.5 + along * 48 + wobble;
+  const halfW = 6.5 + along * 52 + wobble;
   return smoothstep(halfW, halfW * 0.52, best);
 }
 
@@ -124,7 +148,7 @@ const scene = new THREE.Scene();
 const FOG_COLOR = 0xd9dfc4;
 scene.fog = new THREE.FogExp2(FOG_COLOR, 0.0044);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 3400);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 4200);
 camera.rotation.order = 'YXZ';
 
 const SUN_DIR = new THREE.Vector3(0.38, 0.54, 0.75).normalize();
@@ -308,7 +332,7 @@ const skyVert = /* glsl */ `
 `;
 
 const skyMesh = new THREE.Mesh(
-  new THREE.SphereGeometry(3300, 48, 28),
+  new THREE.SphereGeometry(4100, 48, 28),
   new THREE.ShaderMaterial({
     uniforms: skyUniforms,
     side: THREE.BackSide,
@@ -1115,7 +1139,7 @@ function makePathTexture() {
 let terrainMesh = null;
 {
   const SIZE = WORLD.terrainSize;
-  const SEG = 700;
+  const SEG = 780;
   const geo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
   geo.rotateX(-Math.PI / 2);
 
@@ -1175,6 +1199,11 @@ let terrainMesh = null;
     const pd = pathDistance(x, z);
     if (pd < 2.8) {
       col.lerp(trail, smoothstep(2.8, 0.8, pd) * 0.42);
+    }
+    // 去雪山的路：踩出来的土色带，远看也看得见
+    const rd = roadDistance(x, z);
+    if (rd < 6.0) {
+      col.lerp(trail, smoothstep(6.0, 1.2, rd) * 0.62);
     }
 
     // 大尺度枯荣斑块：一片草原上总有晒黄的坡和还绿着的洼
@@ -1297,11 +1326,11 @@ let terrainMesh = null;
    向阳面亮、背阴面暗、山谷发青、山脊挂雪 —— 这些都不是画上去的。 */
 const MTN = {
   x: 0,
-  z0: 1330,     // 靠近玩家的这一边：落在地形边缘（z=1300）之后
-  w: 6400,      // 山脉东西向铺开 6.4 公里，站在草原上左右都望不到头
-  d: 1500,
-  segX: 620,
-  segZ: 220,
+  z0: 1650,     // 靠近玩家的这一边：落在地形边缘（z=1700）之后
+  w: 7600,      // 山脉东西向铺开 7.6 公里，站在草原上左右都望不到头
+  d: 1750,
+  segX: 700,
+  segZ: 250,
   baseY: -150,  // 山脚埋到地平线以下，接缝被前面的丘陵和雾盖住
   peak: 760,
 };
@@ -1361,16 +1390,27 @@ function mtnCrest(u) {
    山脊与山脊之间自然会落成山谷 —— 这是锥形山峰做不到的。 */
 const MTN_RIDGES = [
   // [x1, z1, h1, x2, z2, h2, 半宽]
-  [280, 1730, 1010, 760, 1775, 440, 580],    // 主峰向东
-  [280, 1730, 1010, -200, 1795, 525, 580],   // 主峰向西
-  [280, 1730, 1010, 520, 1450, 440, 450],    // 主峰向南（朝观众的一侧）
-  [280, 1730, 1010, 60, 1900, 580, 540],     // 主峰向北
-  [-620, 1790, 685, -300, 1855, 495, 450],   // 西侧第二座
-  [-620, 1790, 685, -1120, 1795, 410, 490],
-  [-1560, 1775, 465, -2010, 1780, 275, 450],
-  [1230, 1790, 580, 1640, 1775, 335, 470],
-  [1230, 1790, 580, 830, 1855, 380, 400],
-  [-150, 1560, 365, 420, 1530, 300, 450],    // 前面那道矮山肩
+  [280, 2050, 1010, 760, 2095, 440, 580],    // 主峰向东
+  [280, 2050, 1010, -200, 2115, 525, 580],   // 主峰向西
+  [280, 2050, 1010, 520, 1770, 440, 450],    // 主峰向南（朝观众的一侧）
+  [280, 2050, 1010, 60, 2220, 580, 540],     // 主峰向北
+  [-620, 2110, 685, -300, 2175, 495, 450],   // 西侧第二座
+  [-620, 2110, 685, -1120, 2115, 410, 490],
+  [-1560, 2095, 465, -2010, 2100, 275, 450],
+  [1230, 2110, 580, 1640, 2095, 335, 470],
+  [1230, 2110, 580, 830, 2175, 380, 400],
+  [-150, 1880, 365, 420, 1850, 300, 450],    // 前面那道矮山肩
+  // —— 加密的一层：东西两端各补两座，主峰背后再压两座，
+  //    让山脊连成一条不断的天际线，而不是几座孤峰 ——
+  [760, 2160, 700, 1140, 2140, 430, 430],    // 主峰东侧的次峰
+  [-760, 2200, 640, -1180, 2180, 400, 430],  // 主峰西侧的次峰
+  [60, 2300, 560, 420, 2320, 350, 420],      // 主峰背后
+  [-2240, 2110, 520, -2680, 2095, 300, 480], // 远西
+  [-3050, 2090, 380, -3450, 2085, 220, 480], // 最西
+  [2100, 2100, 470, 2520, 2085, 280, 470],   // 远东
+  [3000, 2090, 340, 3400, 2085, 200, 470],   // 最东
+  [520, 1830, 300, 980, 1815, 230, 360],     // 前沿的矮峰
+  [-620, 1840, 315, -1040, 1820, 235, 360],  // 前沿的矮峰
 ];
 
 const mtnUniforms = {
@@ -1806,7 +1846,7 @@ function makePathRibbon(pointsXZ, halfWidth) {
 makePathRibbon(PATH_POINTS, 0.72);
 makePathRibbon(INNER_PATH_POINTS, 0.68);
 // 去花海的路面：走的人多了压出来的一道窄车辙
-makePathRibbon(FLOWER_ROAD, 0.46);
+makePathRibbon(FLOWER_ROAD, 1.15);
 
 /* =========================================================
    6. 风与草
@@ -2263,7 +2303,7 @@ function buildChunk(cx, cz, ring) {
     const y = heightAt(x, z);
     const vitality = fbm(x * 0.021 + 5, z * 0.021 + 2, 3);
 
-    if (pathDistance(x, z) < 1.05 || insideFarmWork(x, z, 0.25)) {
+    if (pathDistance(x, z) < 1.05 || roadDistance(x, z) < 1.45 || insideFarmWork(x, z, 0.25)) {
       dummy.position.set(x, -999, z);
       dummy.scale.setScalar(0.0001);
       dummy.updateMatrix();
@@ -2311,7 +2351,7 @@ function buildChunk(cx, cz, ring) {
     const z = baseZ + rand() * CHUNK;
     const y = heightAt(x, z);
     const clump = fbm(x * 0.046 + 9, z * 0.046 - 3, 3);
-    const blocked = pathDistance(x, z) < 1.2 || insideFarmWork(x, z, 0.2);
+    const blocked = pathDistance(x, z) < 1.2 || roadDistance(x, z) < 1.45 || insideFarmWork(x, z, 0.2);
     if (blocked || (clump < 0.45 && rand() < 0.65)) {
       dummy.position.set(x, -999, z);
       dummy.scale.setScalar(0.0001);
@@ -2353,7 +2393,7 @@ function buildChunk(cx, cz, ring) {
     const y = heightAt(x, z);
     const boost = meadowBoost(x, z);
     const sea = seaAt(x, z);
-    const blocked = pathDistance(x, z) < 1.15 || insideFarmWork(x, z, 0.2);
+    const blocked = pathDistance(x, z) < 1.15 || roadDistance(x, z) < 1.45 || insideFarmWork(x, z, 0.2);
     if (blocked || rand() > 0.62 + boost * 0.38 - sea * 0.26) {
       dummy.position.set(x, -999, z);
       dummy.scale.setScalar(0.0001);
@@ -2401,7 +2441,7 @@ function buildChunk(cx, cz, ring) {
     const keep = 0.42 + boost * 0.58;
     let sea = seaAt(x, z);
     const inYard = Math.abs(x - FARM.x) < FARM.halfX - 0.6 && Math.abs(z - FARM.z) < FARM.halfZ - 0.6;
-    const blocked = pathDistance(x, z) < 1.25 || insideFarmWork(x, z, 0.25) || (inYard && rand() < 0.6);
+    const blocked = pathDistance(x, z) < 1.25 || roadDistance(x, z) < 1.6 || insideFarmWork(x, z, 0.25) || (inYard && rand() < 0.6);
     // 花海里几乎不留空：能开的地方都开满
     const keepAll = keep + sea * (1.02 - keep);
     if (blocked || rand() > keepAll) {

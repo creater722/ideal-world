@@ -72,10 +72,10 @@ export function mulberry32(seed) {
 /* ---------------- 世界地理 ---------------- */
 
 export const WORLD = {
-  radius: 1080,       // 玩家能走到的边界：一路能走到雪山脚下
-  terrainSize: 2600,  // 地形网格边长
-  hillStart: 470,     // 外圈山脊开始抬起的半径
-  hillFull: 1120,
+  radius: 1350,       // 玩家能走到的边界：一路能走到雪山脚下
+  terrainSize: 3400,  // 地形网格边长（山推远之后，地形也要跟着铺过去）
+  hillStart: 600,     // 外圈山脊开始抬起的半径
+  hillFull: 1450,
 };
 
 /* 农场。坐标写死：地形要在这里压平 */
