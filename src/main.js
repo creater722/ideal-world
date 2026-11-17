@@ -2459,6 +2459,15 @@ document.querySelectorAll('[data-back]').forEach((btn) => {
   });
 });
 
+document.getElementById('goto-snow').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const target = location.protocol === 'file:' ? '雪原.html' : './snow.html';
+  pauseEl.classList.remove('show');
+  fadeEl.style.transition = 'opacity .55s ease';
+  fadeEl.style.opacity = '1';
+  setTimeout(() => { location.href = target; }, 580);
+});
+
 document.getElementById('goto-grass').addEventListener('click', (e) => {
   e.stopPropagation();
   const target = location.protocol === 'file:' ? '草原.html' : './grassland.html';

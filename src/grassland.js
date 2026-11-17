@@ -3566,6 +3566,16 @@ document.querySelectorAll('[data-back]').forEach((btn) => {
   });
 });
 
+document.getElementById('goto-snow').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const target = location.protocol === 'file:' ? '雪原.html' : './snow.html';
+  pauseEl.classList.remove('show');
+  const fadeEl = document.getElementById('fade');
+  fadeEl.style.transition = 'opacity .55s ease';
+  fadeEl.style.opacity = '1';
+  setTimeout(() => { location.href = target; }, 580);
+});
+
 document.getElementById('goto-wild').addEventListener('click', (e) => {
   e.stopPropagation();
   const target = location.protocol === 'file:' ? '理想的世界.html' : './';

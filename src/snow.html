@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>理想的世界 · 雪原</title>
+<style>
+  :root {
+    --ink: #3b3a28;
+    --ink-soft: #5c5a42;
+    --ink-dim: rgba(59, 58, 40, .62);
+    --paper: rgba(253, 249, 236, .80);
+    --paper-strong: rgba(253, 249, 236, .92);
+    --line: rgba(92, 82, 52, .22);
+    --olive: #5d6a3a;
+    --olive-deep: #3f4a2a;
+    --gold: #c49a45;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #c9d4a4; overflow: hidden;
+    color: var(--ink);
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  canvas#scene {
+    position: fixed; inset: 0; width: 100%; height: 100%; display: block;
+  }
+  canvas#scene:focus { outline: none; }
+  body.playing { cursor: none; }
+
+  #grade {
+    position: fixed; inset: 0; pointer-events: none; z-index: 2;
+    background:
+      radial-gradient(90% 72% at 76% 2%, rgba(255, 241, 196, .16), rgba(255, 241, 196, 0) 64%),
+      radial-gradient(122% 108% at 50% 48%, rgba(0, 0, 0, 0) 55%, rgba(46, 50, 26, .22) 100%);
+    mix-blend-mode: multiply;
+  }
+
+  .layer {
+    position: fixed; inset: 0; z-index: 5;
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 1.2s ease;
+  }
+  .hidden { display: none !important; }
+
+  /* ---------- 开场 ---------- */
+  #intro {
+    background:
+      radial-gradient(48% 42% at 50% 43%, rgba(253, 250, 238, .52), rgba(253, 250, 238, 0) 72%),
+      radial-gradient(120% 100% at 50% 112%, rgba(250, 247, 233, .52), rgba(250, 247, 233, .06) 60%),
+      linear-gradient(180deg, rgba(247, 245, 230, .38), rgba(247, 245, 230, .07) 44%, rgba(250, 247, 234, .52));
+    backdrop-filter: blur(1.6px);
+  }
+  #intro.dismiss { opacity: 0; pointer-events: none; }
+  .intro-inner {
+    text-align: center; padding: 0 28px;
+    transform: translateY(-1.2vh);
+  }
+  .eyebrow {
+    font-size: 11px; letter-spacing: .66em; padding-left: .66em;
+    color: rgba(59, 58, 40, .62); margin-bottom: 32px;
+    animation: rise 2.4s ease both;
+  }
+  h1 {
+    margin: 0; font-weight: 400;
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: clamp(46px, 7.4vw, 94px);
+    letter-spacing: .34em; padding-left: .34em;
+    color: #333a20;
+    text-shadow: 0 2px 46px rgba(255, 252, 234, .96), 0 1px 3px rgba(255, 255, 255, .62);
+    animation: rise 2.8s .1s ease both;
+  }
+  .sub {
+    margin: 30px 0 0; font-size: clamp(12.5px, 1.3vw, 15px);
+    line-height: 2.2; letter-spacing: .24em; padding-left: .24em;
+    color: rgba(51, 52, 33, .86);
+    text-shadow: 0 1px 16px rgba(253, 250, 238, .96), 0 0 38px rgba(253, 250, 238, .72);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    animation: rise 3.2s .2s ease both;
+  }
+  #enter {
+    margin-top: 46px; padding: 15px 44px 15px 48px;
+    background: rgba(255, 252, 240, .68);
+    border: 1px solid rgba(92, 82, 52, .34); border-radius: 999px;
+    color: #46512d; font-size: 13.5px; letter-spacing: .48em;
+    font-family: inherit; cursor: pointer;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 10px 34px rgba(96, 94, 58, .12);
+    transition: background .55s ease, border-color .55s ease, transform .55s ease;
+    animation: rise 3.4s .3s ease both;
+  }
+  #enter:hover {
+    background: rgba(255, 252, 240, .86);
+    border-color: rgba(70, 78, 42, .58);
+    transform: translateY(-1px);
+  }
+
+  /* 场景切换 */
+  .scenes {
+    margin-top: 24px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    animation: rise 3.5s .38s ease both;
+  }
+  .scene-label {
+    font-size: 10px; letter-spacing: .3em; padding-left: .3em;
+    color: rgba(59, 58, 40, .5);
+    margin-right: 4px;
+  }
+  .scene {
+    padding: 8px 18px 8px calc(18px + .3em);
+    border: 1px solid rgba(92, 82, 52, .26);
+    border-radius: 999px;
+    background: rgba(255, 252, 240, .55);
+    color: rgba(59, 58, 40, .62);
+    font-family: inherit; font-size: 11.5px; letter-spacing: .3em;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+    transition: background .45s ease, color .45s ease, border-color .45s ease;
+  }
+  .scene:hover {
+    background: rgba(255, 252, 240, .88);
+    color: #46512d;
+    border-color: rgba(70, 78, 42, .5);
+  }
+  .scene.on {
+    background: #55602f;
+    color: #fbf8e9;
+    border-color: #55602f;
+    cursor: default;
+    box-shadow: 0 6px 16px rgba(60, 70, 30, .18);
+  }
+
+  .tip {
+    margin-top: 24px; font-size: 10.5px; letter-spacing: .24em;
+    color: rgba(48, 50, 31, .55);
+    text-shadow: 0 1px 10px rgba(253, 250, 238, .85);
+    animation: rise 3.6s .4s ease both;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ---------- 暂停 / 设置菜单 ---------- */
+  #pause {
+    background: rgba(246, 242, 226, .30);
+    backdrop-filter: blur(10px) saturate(.94);
+    z-index: 7;
+    opacity: 0;
+    transition: opacity .34s ease;
+  }
+  #pause.show { opacity: 1; }
+
+  .menu {
+    width: min(352px, 87vw);
+    padding: 30px 26px 18px;
+    border: 1px solid rgba(255, 255, 255, .66);
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(253, 250, 238, .95), rgba(246, 242, 227, .92));
+    box-shadow: 0 26px 64px rgba(52, 56, 26, .22), 0 0 0 1px rgba(92, 82, 52, .06);
+    text-align: center;
+  }
+  .menu-title {
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 20px; letter-spacing: .36em; padding-left: .36em;
+    color: #3f452b; margin-bottom: 7px;
+  }
+  .menu-sub {
+    font-size: 10.5px; letter-spacing: .2em; padding-left: .2em;
+    color: rgba(59, 58, 40, .44); margin-bottom: 24px;
+  }
+  .menu-btn {
+    display: flex; align-items: center; justify-content: space-between;
+    width: 100%; padding: 13px 16px 13px 18px; margin-bottom: 9px;
+    border: 1px solid rgba(92, 82, 52, .18);
+    border-radius: 9px;
+    background: rgba(255, 252, 240, .52);
+    color: #4a5131;
+    font-family: inherit; font-size: 12.5px; letter-spacing: .2em;
+    cursor: pointer;
+    transition: background .28s ease, border-color .28s ease, transform .28s ease;
+  }
+  .menu-btn:hover {
+    background: rgba(255, 253, 244, .95);
+    border-color: rgba(70, 78, 42, .42);
+    transform: translateY(-1px);
+  }
+  .menu-btn:active { transform: translateY(0); }
+  .menu-btn .hint {
+    font-size: 9.5px; letter-spacing: .12em;
+    color: rgba(59, 58, 40, .38);
+  }
+  .menu-btn.primary {
+    background: #55602f; color: #fbf8e9; border-color: #55602f;
+    box-shadow: 0 8px 20px rgba(60, 70, 30, .22);
+  }
+  .menu-btn.primary:hover { background: #616c37; border-color: #616c37; }
+  .menu-btn.primary .hint { color: rgba(251, 248, 233, .62); }
+
+  .panel { display: none; }
+  .panel.on { display: block; }
+  .panel-back {
+    margin-top: 4px; padding: 9px;
+    background: none; border: none;
+    color: rgba(59, 58, 40, .46);
+    font-family: inherit; font-size: 11px; letter-spacing: .2em;
+    cursor: pointer; transition: color .24s ease;
+  }
+  .panel-back:hover { color: #46512d; }
+
+  .world-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; margin-bottom: 9px; text-align: left;
+    border: 1px solid rgba(92, 82, 52, .16); border-radius: 9px;
+    background: rgba(255, 252, 240, .42);
+    cursor: pointer;
+    transition: border-color .28s ease, background .28s ease;
+  }
+  .world-item:hover { border-color: rgba(70, 78, 42, .44); background: rgba(255, 253, 244, .92); }
+  .world-item.cur {
+    border-color: rgba(85, 96, 47, .5);
+    background: rgba(85, 96, 47, .09);
+    cursor: default;
+  }
+  .world-name { font-size: 13px; letter-spacing: .2em; color: #434a2c; }
+  .world-desc { font-size: 10px; letter-spacing: .1em; color: rgba(59, 58, 40, .44); margin-top: 4px; }
+  .world-tag { font-size: 9.5px; letter-spacing: .16em; color: rgba(59, 58, 40, .48); }
+
+  .bind-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 3px;
+    border-bottom: 1px solid rgba(92, 82, 52, .12);
+  }
+  .bind-row:last-of-type { border-bottom: none; }
+  .bind-label { font-size: 12px; letter-spacing: .18em; color: rgba(59, 58, 40, .74); }
+  .bind-key {
+    min-width: 96px; padding: 7px 12px;
+    border: 1px solid rgba(92, 82, 52, .24); border-radius: 7px;
+    background: rgba(255, 252, 240, .62);
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 11.5px; letter-spacing: .06em; color: #3f452b;
+    cursor: pointer;
+    transition: border-color .24s ease, background .24s ease, color .24s ease;
+  }
+  .bind-key:hover { border-color: rgba(70, 78, 42, .5); background: rgba(255, 253, 244, .95); }
+  .bind-key.listening {
+    border-color: #b08a34; color: #8a6a22;
+    animation: waitPulse 1.1s ease-in-out infinite;
+  }
+  @keyframes waitPulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+
+  /* ---------- 云端存档 ---------- */
+  .save-state {
+    margin-bottom: 12px; padding: 10px 12px;
+    border-radius: 9px; background: rgba(85, 96, 47, .07);
+    font-size: 10.5px; line-height: 1.6; letter-spacing: .08em;
+    color: rgba(59, 58, 40, .66); text-align: left;
+  }
+  .save-input {
+    display: block; width: 100%; margin-bottom: 8px; padding: 10px 12px;
+    border: 1px solid rgba(92, 82, 52, .22); border-radius: 8px;
+    background: rgba(255, 252, 240, .82);
+    font-family: inherit; font-size: 11.5px; letter-spacing: .06em; color: #3f452b;
+    outline: none;
+  }
+  .save-input:focus { border-color: rgba(70, 78, 42, .6); background: #fffdf5; }
+  .save-actions { display: flex; gap: 8px; margin: 8px 0 4px; }
+  .save-btn {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    padding: 9px 8px;
+    border: 1px solid rgba(92, 82, 52, .2); border-radius: 8px;
+    background: rgba(255, 252, 240, .62);
+    font-family: inherit; font-size: 11px; letter-spacing: .12em; color: #4a5131;
+    cursor: pointer; transition: background .24s ease, border-color .24s ease;
+  }
+  .save-btn:hover { background: rgba(255, 253, 244, .98); border-color: rgba(70, 78, 42, .46); }
+  .save-btn.primary { background: #55602f; border-color: #55602f; color: #fbf8e9; }
+  .save-btn.primary:hover { background: #616c37; }
+  .save-btn:disabled { opacity: .45; cursor: default; }
+  .save-hello { font-size: 11.5px; letter-spacing: .1em; color: #434a2c; margin-bottom: 4px; }
+  .save-meta { font-size: 9.5px; letter-spacing: .08em; color: rgba(59, 58, 40, .46); min-height: 14px; margin-bottom: 8px; }
+  .save-backup { display: flex; gap: 8px; margin-top: 10px; }
+  .save-link {
+    display: block; margin-top: 12px; padding: 4px;
+    font-size: 10px; letter-spacing: .12em; text-align: center;
+    color: rgba(70, 78, 42, .62); text-decoration: none;
+    border-bottom: 1px solid rgba(85, 96, 47, .2);
+    transition: color .24s ease, border-color .24s ease;
+  }
+  .save-link:hover { color: #46512d; border-color: rgba(85, 96, 47, .46); }
+  .save-note {
+    margin-top: 9px; font-size: 9.5px; line-height: 1.55; letter-spacing: .06em;
+    color: rgba(59, 58, 40, .4); text-align: left;
+  }
+
+  .menu-tip {
+    margin-top: 10px; min-height: 15px;
+    font-size: 10.5px; letter-spacing: .12em; line-height: 1.5;
+    color: rgba(70, 78, 42, .72);
+    opacity: 0; transition: opacity .3s ease;
+  }
+  .menu-tip.on { opacity: 1; }
+
+  /* ---------- HUD ---------- */
+  #hud {
+    position: fixed; inset: 0; z-index: 4; pointer-events: none;
+    opacity: 0; transition: opacity 1.6s ease;
+  }
+  body.started #hud { opacity: 1; }
+  body.clean #hud { opacity: 0; }
+
+  .mark {
+    position: absolute; top: 28px; left: 32px;
+    display: flex; align-items: baseline; gap: 11px;
+    padding: 10px 17px 10px 19px;
+    background: var(--paper);
+    border: 1px solid rgba(255, 255, 255, .5);
+    border-radius: 999px;
+    box-shadow: 0 10px 32px rgba(62, 64, 34, .10);
+    backdrop-filter: blur(9px);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 12.5px; letter-spacing: .30em;
+    color: #41472c;
+  }
+  .mark span {
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 9.5px; letter-spacing: .24em; color: rgba(65, 71, 44, .48);
+  }
+
+  .clock {
+    position: absolute; top: 28px; right: 32px;
+    padding: 10px 17px;
+    background: var(--paper);
+    border: 1px solid rgba(255, 255, 255, .5);
+    border-radius: 999px;
+    box-shadow: 0 10px 32px rgba(62, 64, 34, .10);
+    backdrop-filter: blur(9px);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 11.5px; letter-spacing: .2em;
+    color: #41472c;
+    white-space: nowrap;
+  }
+
+  .place {
+    position: absolute; top: 14vh; left: 50%; transform: translateX(-50%);
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: clamp(15px, 1.7vw, 21px);
+    letter-spacing: .5em; padding: 8px 20px 8px 25px;
+    white-space: nowrap;
+    color: #4a5131;
+    background: rgba(253, 250, 238, .68);
+    border: 1px solid rgba(255, 255, 255, .45);
+    border-radius: 999px;
+    box-shadow: 0 8px 30px rgba(60, 62, 32, .10);
+    backdrop-filter: blur(8px);
+    opacity: 0; transition: opacity 2s ease;
+  }
+  .place.on { opacity: 1; }
+
+  /* 种子栏 */
+  .seeds {
+    position: absolute; left: 32px; bottom: 30px;
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 13px 9px 15px;
+    background: var(--paper);
+    border: 1px solid rgba(255, 255, 255, .5);
+    border-radius: 16px;
+    box-shadow: 0 12px 34px rgba(58, 60, 30, .12);
+    backdrop-filter: blur(10px);
+    transition: opacity 1.6s ease;
+  }
+  .seeds .label {
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 10.5px; letter-spacing: .24em; color: rgba(59, 58, 40, .52);
+    margin-right: 3px;
+  }
+  .seed {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 11px 7px 10px;
+    border-radius: 999px;
+    font-size: 11px; letter-spacing: .08em;
+    color: #5a5940;
+    border: 1px solid transparent;
+    transition: background .35s ease, color .35s ease, border-color .35s ease, transform .35s ease;
+  }
+  .seed i {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--c);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, .55);
+    font-style: normal;
+  }
+  .seed b {
+    font-weight: 500; font-size: 9.5px; opacity: .5; margin-right: 1px;
+  }
+  .seed.on {
+    background: #55602f; color: #fbf8e9;
+    border-color: rgba(58, 66, 30, .4);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(60, 70, 30, .2);
+  }
+  .seed.on b { opacity: .62; }
+  .seeds .divider {
+    width: 1px; height: 18px;
+    background: rgba(92, 82, 52, .16);
+    margin: 0 2px;
+  }
+  .water {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 10px;
+    font-size: 11px; letter-spacing: .08em; color: #5a5940;
+    border-radius: 999px;
+    transition: opacity .3s ease;
+  }
+  .water i {
+    width: 7px; height: 7px;
+    border-radius: 50% 50% 50% 0;
+    transform: rotate(45deg);
+    background: #6fa7c7;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, .55);
+    font-style: normal;
+  }
+  .water b { font-weight: 500; font-size: 10.5px; color: #46512d; }
+  .water.empty { opacity: .42; }
+
+  /* 库存 */
+  .stock {
+    position: absolute; right: 32px; bottom: 30px;
+    display: flex; flex-direction: column; align-items: stretch; gap: 5px;
+    padding: 11px 16px;
+    background: var(--paper);
+    border: 1px solid rgba(255, 255, 255, .5);
+    border-radius: 16px;
+    box-shadow: 0 12px 34px rgba(58, 60, 30, .12);
+    backdrop-filter: blur(10px);
+    transition: opacity 1.6s ease;
+  }
+  .stock-row { display: flex; align-items: center; gap: 13px; }
+  .stock-row.storage-row {
+    border-top: 1px solid rgba(92, 82, 52, .18);
+    padding-top: 5px;
+  }
+  .stock .label {
+    font-family: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
+    font-size: 10.5px; letter-spacing: .24em; color: rgba(59, 58, 40, .52);
+    margin-right: 2px;
+  }
+  .stock .item {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; letter-spacing: .06em; color: #56543c;
+  }
+  .stock .item i {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--c);
+    box-shadow: inset 0 -2px 3px rgba(0, 0, 0, .16), 0 0 0 2px rgba(255, 255, 255, .5);
+    font-style: normal;
+  }
+  .stock .item em {
+    font-style: normal; font-weight: 600; font-size: 12px;
+    color: #3f452b; min-width: 12px; text-align: right;
+  }
+  .stock.bump { animation: stockBump .38s ease; }
+  @keyframes stockBump {
+    0% { transform: scale(1); }
+    35% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+  }
+
+  .keys {
+    position: absolute; bottom: 116px; left: 50%; transform: translateX(-50%);
+    font-size: 10.5px; letter-spacing: .14em; white-space: nowrap;
+    color: rgba(255, 253, 242, .92);
+    text-shadow: 0 1px 3px rgba(38, 42, 18, .55), 0 0 18px rgba(38, 42, 18, .45);
+    transition: opacity 1.8s ease;
+  }
+  .keys.dim { opacity: 0; }
+
+  /* 交互提示 */
+  .prompt {
+    position: absolute; left: 50%; bottom: 142px; transform: translate(-50%, 6px);
+    display: flex; align-items: center; gap: 11px;
+    padding: 10px 18px 10px 12px;
+    background: var(--paper-strong);
+    border: 1px solid rgba(255, 255, 255, .55);
+    border-radius: 999px;
+    box-shadow: 0 14px 38px rgba(52, 56, 24, .16);
+    backdrop-filter: blur(10px);
+    font-size: 12.5px; letter-spacing: .08em; color: #434a2c;
+    opacity: 0; pointer-events: none;
+    transition: opacity .32s ease, transform .32s ease;
+    white-space: nowrap;
+  }
+  .prompt.on { opacity: 1; transform: translate(-50%, 0); }
+  .prompt .key {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 27px; height: 27px; padding: 0 8px;
+    background: #55602f; color: #fdfaec;
+    border-radius: 8px;
+    font-size: 12px; font-weight: 600; letter-spacing: .02em;
+    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .18), 0 3px 8px rgba(50, 60, 24, .22);
+  }
+  .prompt .sub {
+    font-size: 10px; letter-spacing: .1em; color: rgba(67, 74, 44, .55);
+    margin-left: 2px;
+  }
+  .prompt .bar {
+    width: 76px; height: 4px; border-radius: 999px;
+    background: rgba(85, 96, 47, .16); overflow: hidden;
+  }
+  .prompt .bar i {
+    display: block; height: 100%; border-radius: 999px;
+    background: #7c8b45; width: 0%;
+    transition: width .28s linear;
+  }
+
+  /* 飘字 */
+  .toast {
+    position: absolute; left: 50%; bottom: 198px; transform: translate(-50%, 8px);
+    padding: 8px 17px;
+    background: rgba(74, 82, 42, .86);
+    color: #fbf8e9;
+    border-radius: 999px;
+    font-size: 12px; letter-spacing: .12em;
+    box-shadow: 0 10px 26px rgba(44, 50, 20, .22);
+    opacity: 0; pointer-events: none;
+    transition: opacity .45s ease, transform .45s ease;
+    white-space: nowrap;
+  }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+  #dot {
+    position: fixed; left: 50%; top: 50%; z-index: 3;
+    width: 4px; height: 4px; margin: -2px 0 0 -2px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, .55);
+    box-shadow: 0 0 0 1px rgba(50, 56, 26, .18);
+    opacity: 0; transition: opacity 1.4s ease;
+    pointer-events: none;
+  }
+  body.started #dot { opacity: .8; }
+  body.clean #dot { opacity: 0; }
+
+  #fade {
+    position: fixed; inset: 0; z-index: 9; pointer-events: none;
+    background: #faf6e7; opacity: 0;
+  }
+
+  @media (max-width: 860px) {
+    .keys { display: none; }
+    .seeds { left: 18px; bottom: 18px; }
+    .stock { right: 18px; bottom: 18px; }
+    .mark { left: 18px; top: 18px; }
+    .clock { right: 18px; top: 18px; }
+    .stock .label { display: none; }
+  }
+  @media (max-width: 720px) {
+    .stock { display: none; }
+    .clock { font-size: 10.5px; padding: 8px 12px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene" tabindex="0"></canvas>
+<div id="grade"></div>
+<div id="dot"></div>
+
+<div id="intro" class="layer">
+  <div class="intro-inner">
+    <div class="eyebrow">一片雪原</div>
+    <h1>雪 原</h1>
+    <p class="sub">雪落在松枝上，冰湖结了一整个冬天<br>夜里，北边的天会亮起来</p>
+    <button id="enter">走进去</button>
+    <div class="scenes" role="group" aria-label="切换场景">
+      <span class="scene-label">场景</span>
+      <button class="scene" data-scene="wild">原野</button>
+      <button class="scene" data-scene="grass">草原</button>
+      <button class="scene on" data-scene="snow" aria-current="true">雪原</button>
+    </div>
+    <div class="tip">鼠标看 · WASD 走 · 点击收菜 · E 互动 · 水井浇水 · 推车运粮</div>
+  </div>
+</div>
+
+<div id="pause" class="layer hidden">
+  <div class="menu">
+    <div class="menu-title">暂停</div>
+    <div class="menu-sub">按 Esc 回到这里</div>
+
+    <div class="panel on" id="panel-main">
+      <button class="menu-btn primary" id="btn-resume">继续游戏</button>
+      <button class="menu-btn" id="btn-world">切换世界<span class="hint">雪原 / 草原 / 原野</span></button>
+      <button class="menu-btn" id="btn-keys">按键设置</button>
+      <button class="menu-btn" id="btn-save">云端存档<span class="hint" id="save-hint">未登录</span></button>
+      <button class="menu-btn" id="btn-quit">退出游戏</button>
+    </div>
+
+    <div class="panel" id="panel-world">
+      <div class="world-item cur">
+        <div><div class="world-name">雪原</div><div class="world-desc">冰湖、松林、极光</div></div>
+        <div class="world-tag">当前</div>
+      </div>
+      <div class="world-item" id="goto-grass">
+        <div><div class="world-name">草原</div><div class="world-desc">农庄、牲畜、漫长的白天</div></div>
+        <div class="world-tag">前往 →</div>
+      </div>
+      <div class="world-item" id="goto-wild">
+        <div><div class="world-name">原野</div><div class="world-desc">湖、木屋、黄昏与星空</div></div>
+        <div class="world-tag">前往 →</div>
+      </div>
+      <button class="panel-back" data-back>← 返回</button>
+    </div>
+
+    <div class="panel" id="panel-save">
+      <div class="save-state" id="save-state">登录后，菜地、推车、粮仓和地面上的收成会保存到云端。</div>
+
+      <div id="save-form">
+        <input class="save-input" id="save-user" maxlength="24" placeholder="用户名（3-24 位字母数字）" autocomplete="username">
+        <input class="save-input" id="save-pass" type="password" maxlength="64" placeholder="密码（至少 6 位）" autocomplete="current-password">
+        <div class="save-actions">
+          <button class="save-btn primary" id="save-login">登录</button>
+          <button class="save-btn" id="save-register">注册</button>
+        </div>
+        <a class="save-link" id="save-open-login" href="./login.html">打开独立登录页 →</a>
+      </div>
+
+      <div id="save-user-box" hidden>
+        <div class="save-hello">已登录：<b id="save-name"></b></div>
+        <div class="save-meta" id="save-meta"></div>
+        <div class="save-actions">
+          <button class="save-btn primary" id="save-now">立即同步</button>
+          <button class="save-btn" id="save-reload">从云端载入</button>
+          <button class="save-btn" id="save-logout">退出</button>
+        </div>
+      </div>
+
+      <div class="save-backup">
+        <button class="save-btn" id="save-export">导出备份</button>
+        <label class="save-btn" for="save-import">导入备份</label>
+        <input id="save-import" type="file" accept="application/json,.json" hidden>
+      </div>
+
+      <div class="save-note">站点当前是 HTTP，账号只用于这个游戏，请不要使用常用密码。换设备登录同一账号即可接着玩。</div>
+      <button class="panel-back" data-back>← 返回</button>
+    </div>
+
+    <div class="panel" id="panel-keys">
+      <div class="bind-row"><span class="bind-label">前进</span><button class="bind-key" data-bind="forward">W</button></div>
+      <div class="bind-row"><span class="bind-label">后退</span><button class="bind-key" data-bind="back">S</button></div>
+      <div class="bind-row"><span class="bind-label">左移</span><button class="bind-key" data-bind="left">A</button></div>
+      <div class="bind-row"><span class="bind-label">右移</span><button class="bind-key" data-bind="right">D</button></div>
+      <div class="bind-row"><span class="bind-label">快走</span><button class="bind-key" data-bind="run">Shift</button></div>
+      <button class="panel-back" data-back>← 返回</button>
+    </div>
+
+    <div class="menu-tip" id="menu-tip"></div>
+  </div>
+</div>
+
+<div id="hud">
+  <div class="mark">理想的世界<span>雪原</span></div>
+  <div class="clock" id="time">16:24 · 午后</div>
+  <div class="place" id="place"></div>
+
+  <div class="seeds" id="seeds">
+    <span class="label">种子</span>
+    <span class="seed on" data-k="0"><i style="--c:#e07a2f"></i><b>1</b>胡萝卜</span>
+    <span class="seed" data-k="1"><i style="--c:#d8b45c"></i><b>2</b>小麦</span>
+    <span class="seed" data-k="2"><i style="--c:#d24b39"></i><b>3</b>番茄</span>
+    <span class="divider"></span>
+    <span class="water empty" id="water"><i></i>水壶 <b id="waterN">0</b></span>
+  </div>
+
+  <div class="stock" id="stock">
+    <div class="stock-row">
+      <span class="label">推车</span>
+      <span class="item"><i style="--c:#e07a2f"></i>胡萝卜 <em id="c0">0</em></span>
+      <span class="item"><i style="--c:#d8b45c"></i>小麦 <em id="c1">0</em></span>
+      <span class="item"><i style="--c:#d24b39"></i>番茄 <em id="c2">0</em></span>
+    </div>
+    <div class="stock-row storage-row">
+      <span class="label">粮仓</span>
+      <span class="item"><i style="--c:#e07a2f"></i>胡萝卜 <em id="s0">0</em></span>
+      <span class="item"><i style="--c:#d8b45c"></i>小麦 <em id="s1">0</em></span>
+      <span class="item"><i style="--c:#d24b39"></i>番茄 <em id="s2">0</em></span>
+    </div>
+  </div>
+
+  <div class="prompt" id="prompt"></div>
+  <div class="toast" id="toast"></div>
+  <div class="keys" id="keys">WASD 走 · 移动鼠标看 · 点击收菜 · 1/2/3 选种 · E 互动 / 推车 · T 换时辰 · M 声音 · H 净屏 · Esc 菜单</div>
+</div>
+
+<div id="fade"></div>
+<script>
+/* 场景切换：本地双击用中文文件名，线上用 index.html */
+(function () {
+  const LINKS = location.protocol === 'file:'
+    ? { wild: '理想的世界.html', grass: '草原.html', snow: '雪原.html' }
+    : { wild: './', grass: './grassland.html', snow: './snow.html' };
+  const CURRENT = 'snow';
+  const fade = document.getElementById('fade');
+  document.querySelectorAll('.scene[data-scene]').forEach((btn) => {
+    const key = btn.dataset.scene;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (key === CURRENT) return;
+      fade.style.transition = 'opacity .6s ease';
+      fade.style.opacity = '1';
+      setTimeout(() => { location.href = LINKS[key]; }, 620);
+    });
+  });
+})();
+</script>
+<script>/*__BUNDLE__*/</script>
+</body>
+</html>

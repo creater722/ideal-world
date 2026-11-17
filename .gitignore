@@ -5,6 +5,7 @@ dist/
 # 单文件产物（由 npm run build 生成）
 理想的世界.html
 草原.html
+雪原.html
 
 # 调试截图
 *.png

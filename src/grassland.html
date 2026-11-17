@@ -576,6 +576,7 @@
       <span class="scene-label">场景</span>
       <button class="scene" data-scene="wild">原野</button>
       <button class="scene on" data-scene="grass" aria-current="true">草原</button>
+      <button class="scene" data-scene="snow">雪原</button>
     </div>
     <div class="tip">鼠标看 · WASD 走 · 点击收菜 · E 互动 · 水井浇水 · 推车运粮</div>
   </div>
@@ -598,6 +599,10 @@
       <div class="world-item cur">
         <div><div class="world-name">草原</div><div class="world-desc">农庄、牲畜、漫长的白天</div></div>
         <div class="world-tag">当前</div>
+      </div>
+      <div class="world-item" id="goto-snow">
+        <div><div class="world-name">雪原</div><div class="world-desc">冰湖、松林、极光</div></div>
+        <div class="world-tag">前往 →</div>
       </div>
       <div class="world-item" id="goto-wild">
         <div><div class="world-name">原野</div><div class="world-desc">湖、木屋、黄昏与星空</div></div>
@@ -691,8 +696,8 @@
 /* 场景切换：本地双击用中文文件名，线上用 index.html */
 (function () {
   const LINKS = location.protocol === 'file:'
-    ? { wild: '理想的世界.html', grass: '草原.html' }
-    : { wild: './', grass: './grassland.html' };
+    ? { wild: '理想的世界.html', grass: '草原.html', snow: '雪原.html' }
+    : { wild: './', grass: './grassland.html', snow: './snow.html' };
   const CURRENT = 'grass';
   const fade = document.getElementById('fade');
   document.querySelectorAll('.scene[data-scene]').forEach((btn) => {
