@@ -136,6 +136,7 @@ const skyUniforms = {
   uZenith: { value: new THREE.Color(0x3f80c6) },
   uHorizon: { value: new THREE.Color(0xeaf0da) },
   uHaze: { value: new THREE.Color(0xffedc8) },
+  uFog: { value: new THREE.Color(FOG_COLOR) },
   uSunColor: { value: new THREE.Color(0xfff4d8) },
   uCloud: { value: new THREE.Color(0xfffcf4) },
   uNight: { value: 0 },
@@ -151,6 +152,7 @@ const skyFrag = /* glsl */ `
   uniform vec3 uZenith;
   uniform vec3 uHorizon;
   uniform vec3 uHaze;
+  uniform vec3 uFog;
   uniform vec3 uSunColor;
   uniform vec3 uCloud;
   uniform float uNight;
@@ -273,6 +275,12 @@ const skyFrag = /* glsl */ `
       float md = max(dot(dir, uMoonDir), 0.0);
       col += vec3(1.0, 0.97, 0.89) * (pow(md, 9000.0) * 7.0 + pow(md, 420.0) * 0.24) * uStars;
     }
+
+    // 地平线以下接到雾色：地形只画到 800 米，再往外就是这片天。
+    // 天的这一截必须和远处地面的雾同色，否则地形的尽头
+    // 会横着一条「雾色 vs 霞色」的切割线，看着像整个世界断了一刀
+    float below = smoothstep(0.045, -0.006, dir.y);
+    col = mix(col, uFog, below);
 
     gl_FragColor = vec4(col, 1.0);
   }
@@ -1588,23 +1596,26 @@ function buildSnowRange() {
         // 山脊自带的一点雪面亮边
         col += vec3(0.95, 0.96, 1.0) * sn * pow(1.0 - max(N.y, 0.0), 3.0) * 0.10;
 
+        // 夜里沉成深蓝 —— 必须在雾混合之前做。
+        // 雾色是按着时辰调好的（夜里本来就是暗的），如果在雾之后再压暗，
+        // 山脚那圈雾会跟着变暗，和同距离的地面雾对不上，
+        // 山就像被一条亮带横着切断、浮在地上 —— 黄昏最明显
+        col *= mix(1.0, 0.30, uNight);
+        col += uSkyColor * uNight * 0.028;
+
         // 空气透视：越远、越低，越化进天边的雾色
         float aerial = smoothstep(1200.0, 3000.0, dist) * 0.22;
-        // 山脚的雾：颜色与远景地面那层雾一模一样，并且从山脚往上缓缓化开 ——
-        // 这样山是"从雾里长出来"，而不是被一条亮带横着切开
+        // 山脚的雾：颜色必须与地面远处的雾一模一样（就是 uFogColor，不能再乘任何系数），
+        // 越贴近山根化得越彻底 —— 山是「从雾里长出来」的，不是被一条亮带切开
         float mistN = vn(vWorld.xz * 0.0075 + 9.0) * 0.62 + vn(vWorld.xz * 0.024 - 3.0) * 0.38;
         float mistTop = 225.0 + mistN * 165.0;
         float foot = smoothstep(mistTop, mistTop - 235.0, vWorld.y);
         // 雪比岩石更"穿透"雾：雾天里最先看见的总是雪线
         foot *= mix(1.0, 0.72, vSnow);
-        // 雾色往天边的霞色靠一点，免得在天空下面拍出一条白带
-        // 雾色也要跟着入夜变暗，否则夜里山脚会比山头更亮，糊成一条浅色横带
-        vec3 mistCol = uFogColor * mix(1.0, 0.42, uNight);
-        col = mix(col, mistCol, clamp(aerial + foot, 0.0, 0.90));
-
-        // 夜里沉成深蓝
-        col *= mix(1.0, 0.30, uNight);
-        col += uSkyColor * uNight * 0.028;
+        // 山根埋在地平线以下（baseY=-90），这一段彻底化进雾里，接缝归零
+        float sink = smoothstep(40.0, -95.0, vWorld.y);
+        float fogCap = mix(0.90, 1.0, sink);
+        col = mix(col, uFogColor, clamp(aerial + foot, 0.0, fogCap));
 
         gl_FragColor = vec4(col, 1.0);
       }
@@ -5063,6 +5074,7 @@ function applyTime() {
   skyUniforms.uZenith.value.copy(s.zenith);
   skyUniforms.uHorizon.value.copy(s.horizon);
   skyUniforms.uHaze.value.copy(s.haze);
+  skyUniforms.uFog.value.copy(s.fog);
   skyUniforms.uCloud.value.copy(s.cloud);
   skyUniforms.uSunColor.value.copy(s.sun);
   skyUniforms.uNight.value = s.night;
@@ -5538,6 +5550,7 @@ if (new URLSearchParams(location.search).has('still')) {
   if (p.has('z')) player.z = parseFloat(p.get('z'));
   if (p.has('yaw')) player.yaw = parseFloat(p.get('yaw'));
   if (p.has('pitch')) player.pitch = parseFloat(p.get('pitch'));
+  if (p.has('hour')) time.setHour(parseFloat(p.get('hour')));   // 调试：定点到某个时辰
   if (p.has('clean')) body.classList.add('clean');
 
   // 调试 / 截图：?menu 直接打开设置菜单，?panel=keys|world 直达子面板

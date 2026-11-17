@@ -89,8 +89,10 @@ const GradeShader = {
           vec2 sampleUv = uv + rd * t * (0.22 + d2sun * 1.2);
           vec3 s = texture2D(tDiffuse, clamp(sampleUv, 0.002, 0.998)).rgb;
           float lum = dot(s, vec3(0.2126, 0.7152, 0.0722));
+          // 门槛必须高过「被风吹亮的花头」：黄昏逆光下摇摆的花会逐帧跨过低门槛，
+          // 20 次取样里只要有一朵花跳变，整屏的光罩就跟着抖 —— 看起来就是闪
           float w = 1.0 - t * 0.72;
-          halo += smoothstep(0.70, 2.8, lum) * w;
+          halo += smoothstep(1.25, 3.5, lum) * w;
           wsum += w;
         }
         halo /= max(wsum, 0.0001);
