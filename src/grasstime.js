@@ -40,6 +40,7 @@ for (const k of TIME_KEYS) {
 
 const ANCHORS = [
   { h: 18.35, line: '光开始变暖了。' },
+  { h: 18.82, line: '日照金山。' },
   { h: 19.35, line: '太阳快落到草下面去了。' },
   { h: 21.7, line: '萤火虫出来了。' },
   { h: 6.3, line: '天快亮了。' },

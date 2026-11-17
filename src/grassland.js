@@ -1422,6 +1422,7 @@ const mtnUniforms = {
   uFogColor: { value: new THREE.Color(0xc8d6e2) },
   uNight: { value: 0 },
   uDusk: { value: 0 },
+  uGold: { value: 0 },   // 日照金山：只在日出/日落的一个窄窗口里亮
 };
 
 function buildSnowRange() {
@@ -1588,6 +1589,7 @@ function buildSnowRange() {
       uniform vec3 uFogColor;
       uniform float uNight;
       uniform float uDusk;
+      uniform float uGold;
 
       varying vec3 vWorld;
       varying vec3 vNrm;
@@ -1656,9 +1658,25 @@ function buildSnowRange() {
         float aoK = mix(0.95, 0.30, sn);
         vec3 col = albedo * (amb + direct) * mix(1.0, vAO, aoK);
 
-        // 日照金山：太阳压到地平线时，高处的雪还亮着，山下的谷已经沉进阴影
+        // 日照金山：太阳压到地平线时，高处的雪还亮着，山下的谷已经沉进阴影。
+        // uGold 是一个很窄的时间窗（日出/日落各一次），窗口里雪顶整片烧成金红。
         float high = smoothstep(220.0, 690.0, vWorld.y);
         col += uSunColor * uDusk * high * mix(0.30, 0.85, sn) * 0.42;
+        // 只染雪线以上、而且只染被太阳照到的那一面。
+        // 注意是"染色"不是"加亮"：直接往上加光会被 ACES 压回白色，雪顶就还是白的。
+        // 黄昏太阳落到山背后，正面其实照不到直射光 ——
+        // 真正的日照金山是"高处的雪还泡在夕阳里"，所以按高度染，只被直射光轻微加权。
+        float goldMask = smoothstep(150.0, 760.0, vWorld.y) * mix(0.20, 1.0, sn);
+        float goldLit = 0.55 + 0.45 * smoothstep(0.0, 0.55, ndl);
+        // 关键：先把亮度压到 0.9 以下再染色。
+        // 雪本身是 HDR 高光，直接染会被 ACES 的肩部抬回白色，多暖的颜色都白搭。
+        float goldL = dot(col, vec3(0.2126, 0.7152, 0.0722));
+        vec3 goldTarget = vec3(1.22, 0.47, 0.145) * min(goldL, 0.95);
+        col = mix(col, goldTarget, clamp(goldMask * uGold * goldLit * 2.6, 0.0, 0.94));
+        // 背光面在这几分钟里压暗一点，亮面才显得"在烧"
+        col *= mix(1.0, 0.84, uGold * (1.0 - smoothstep(0.05, 0.5, ndl)));
+        // 雪脊的那道亮边也一起发烫
+        col += uSunColor * uGold * sn * pow(1.0 - max(N.y, 0.0), 2.2) * 0.55;
 
         // 逆光金边：太阳落到山背后时，雪脊上透出一线暖光
         float back = pow(max(dot(-V, uSunDir), 0.0), 2.2);
@@ -5197,6 +5215,7 @@ function updateCartAudio(speed, dt) {
    ========================================================= */
 
 let lastClockText = '';
+let lastGold = 0;
 let cloudBoost = 1;   // 调试用：?cloud=3 把云影放大，方便确认有没有生效
 
 function updateClock(h) {
@@ -5252,6 +5271,19 @@ function applyTime() {
   mtnUniforms.uFogColor.value.copy(s.fog);
   mtnUniforms.uNight.value = s.night;
   mtnUniforms.uDusk.value = s.dusk;
+
+  // 日照金山的时间窗：太阳贴着地平线的那二十来分钟。
+  // 黄昏 18.25~19.45（峰值 18.85）、清晨 6.05~7.10（峰值 6.55）。
+  const hhGold = s.hour;
+  const goldEve = smoothstep(18.25, 18.55, hhGold) * smoothstep(19.42, 19.02, hhGold);
+  const goldMorn = smoothstep(6.02, 6.28, hhGold) * smoothstep(7.12, 6.78, hhGold);
+  const gold = Math.max(goldEve, goldMorn);
+  mtnUniforms.uGold.value = gold;
+  if (window.__goldForce !== undefined) mtnUniforms.uGold.value = window.__goldForce;
+  if (gold > 0.55 && lastGold <= 0.55) {
+    showToast('日照金山。雪顶还烧着，山谷已经沉进蓝里了。', 6200);
+  }
+  lastGold = gold;
 
   // 时刻驱动的三个"天气参数"：黄昏逆光、清晨露水、云影浓度
   const hh = s.hour;
@@ -5714,6 +5746,7 @@ if (new URLSearchParams(location.search).has('still')) {
   if (p.has('pitch')) player.pitch = parseFloat(p.get('pitch'));
   if (p.has('hour')) time.setHour(parseFloat(p.get('hour')));   // 调试：定点到某个时辰
   if (p.has('clean')) body.classList.add('clean');
+  if (p.has('gold')) window.__goldForce = parseFloat(p.get('gold'));
   if (p.has('drive')) {
     setTimeout(() => { boardTractor(); dbgDrive = true; }, 500);
   }
