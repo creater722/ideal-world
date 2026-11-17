@@ -15,6 +15,7 @@ import { createMusic } from './music.js';
 import { createTimeOfDay, phaseName, formatClock } from './grasstime.js';
 import { createFarm, CROPS } from './grassfarm.js';
 import { createHerd } from './grassanimals.js';
+import { createTractor } from './tractor.js';
 
 /* ---------------------------------------------------------
    去雪山的路上：一条花海走廊，草在这条带子里让位给花
@@ -3405,6 +3406,44 @@ const PLAYER_R = 0.34;
 const SPAWN = { x: 0, z: 8 };
 const player = { x: SPAWN.x, z: SPAWN.z, yaw: 0, pitch: -0.02, vx: 0, vz: 0, bob: 0 };
 let camY = heightAt(player.x, player.z) + EYE;
+
+/* ---------------- 拖拉机 ---------------- */
+const tractor = createTractor(scene, { heightAt });
+let driving = false;
+let truckOrbit = 0;
+let truckPitch = 0;
+let dbgDrive = false;   // 调试：?drive 自动踩油门
+
+function boardTractor() {
+  driving = true;
+  truckOrbit = 0;
+  truckPitch = 0.15;
+  player.vx = 0;
+  player.vz = 0;
+  showToast('挂上一挡，慢慢给油。', 2600);
+  promptKey = '';
+  renderPrompt();
+}
+
+function leaveTractor() {
+  driving = false;
+  tractor.state.speed = 0;
+  const side = tractor.state.yaw + Math.PI / 2;
+  player.x = tractor.x + Math.sin(side) * 1.9;
+  player.z = tractor.z + Math.cos(side) * 1.9;
+  player.yaw = tractor.state.yaw;
+  player.pitch = -0.02;
+  player.vx = 0;
+  player.vz = 0;
+  camY = heightAt(player.x, player.z) + EYE;
+  showToast('熄了火，车停在原地。', 2200);
+  promptKey = '';
+  renderPrompt();
+}
+
+function nearTractor() {
+  return Math.hypot(player.x - tractor.x, player.z - tractor.z) < 3.2;
+}
 {
   const dx = FARM.x - player.x;
   const dz = FARM.z - player.z;
@@ -4092,6 +4131,17 @@ function renderPrompt() {
     }
   };
 
+  if (driving) {
+    const kmh = Math.round(Math.abs(tractor.speed) * 3.6);
+    show('truck', `<span class="key">E</span><span>下车</span><span class="sub">W / S 油门 · A / D 转向 · ${kmh} km/h</span>`);
+    return;
+  }
+
+  if (nearTractor()) {
+    show('board', `<span class="key">E</span><span>上拖拉机</span><span class="sub">沿着路一直往北，能开到雪山脚下</span>`);
+    return;
+  }
+
   if (seated) {
     show('seated', `<span class="key">E</span><span>起身</span><span class="sub">W A S D 也能站起</span>`);
     return;
@@ -4303,6 +4353,14 @@ function fillWater() {
 }
 
 function interact() {
+  if (driving) {
+    leaveTractor();
+    return;
+  }
+  if (nearTractor() && started) {
+    boardTractor();
+    return;
+  }
   if (seated) {
     standUp();
     return;
@@ -4539,6 +4597,11 @@ window.addEventListener('mousemove', (e) => {
 
   if (!dx && !dy) return;
   const sens = locked ? 0.0021 : 0.0029;
+  if (driving) {
+    truckOrbit -= dx * sens;
+    truckPitch = clamp(truckPitch + dy * sens * 0.5, -0.35, 0.95);
+    return;
+  }
   player.yaw -= dx * sens;
   player.pitch = clamp(player.pitch - dy * sens, -1.15, 1.15);
 });
@@ -5432,6 +5495,25 @@ function updatePlayer(t, dt) {
     return;
   }
 
+  if (driving) {
+    const input = {
+      throttle: dbgDrive ? 1 : (paused ? 0 : (held.has(binds.forward) || held.has('ArrowUp') ? 1 : 0)
+        - (held.has(binds.back) || held.has('ArrowDown') ? 1 : 0)),
+      steer: paused ? 0 : (held.has(binds.left) || held.has('ArrowLeft') ? 1 : 0)
+        - (held.has(binds.right) || held.has('ArrowRight') ? 1 : 0),
+      run: held.has(binds.run) || held.has('ShiftRight'),
+      night: timeState.night,
+    };
+    tractor.update(t, dt, input, WORLD.radius - 6);
+    // 玩家跟着车走：草海分块、虫鸣、地名都按车的位置算
+    player.x = tractor.x;
+    player.z = tractor.z;
+    player.yaw = tractor.state.yaw;
+    tractor.placeCamera(camera, truckOrbit, truckPitch, t);
+    updateCartAudio(0, dt);
+    return;
+  }
+
   if (seated) {
     player.vx = 0;
     player.vz = 0;
@@ -5632,6 +5714,23 @@ if (new URLSearchParams(location.search).has('still')) {
   if (p.has('pitch')) player.pitch = parseFloat(p.get('pitch'));
   if (p.has('hour')) time.setHour(parseFloat(p.get('hour')));   // 调试：定点到某个时辰
   if (p.has('clean')) body.classList.add('clean');
+  if (p.has('drive')) {
+    setTimeout(() => { boardTractor(); dbgDrive = true; }, 500);
+  }
+  // 调试：?simdrive=900 同步推进 N 帧（每帧 1/60 秒），确定性地检验行驶与坡度姿态
+  if (p.has('simdrive')) {
+    boardTractor();
+    const n = Math.min(3600, parseInt(p.get('simdrive'), 10) || 600);
+    const steer = parseFloat(p.get('steer') || '0');
+    for (let i = 0; i < n; i++) {
+      tractor.update(i / 60, 1 / 60, { throttle: 1, steer, night: 0 }, WORLD.radius - 6);
+    }
+    player.x = tractor.x;
+    player.z = tractor.z;
+    player.yaw = tractor.state.yaw;
+    truckOrbit = 0;
+    truckPitch = 0.2;
+  }
 
   // 调试 / 截图：?menu 直接打开设置菜单，?panel=keys|world 直达子面板
   if (p.has('menu')) {
