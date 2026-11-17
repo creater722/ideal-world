@@ -86,7 +86,10 @@ export const ICE = {
   level: 0,     // 冰面高度
 };
 
-/* 农场：雪里的一座小屋，照旧保留，压平地面 */
+/* 温泉：雪地里一汪冒热气的水，地形要先压平 */
+export const SPRING = { x: -74, z: 62, r: 7.2, y: 0 };
+
+/* 猎屋：雪里的一座屋子，压平地面 */
 export const FARM = {
   x: 17,
   z: -31,
@@ -198,6 +201,7 @@ function baseHeight(x, z) {
 }
 
 FARM.y = baseHeight(FARM.x, FARM.z);
+SPRING.y = baseHeight(SPRING.x, SPRING.z);
 
 export function heightAt(x, z) {
   let h = baseHeight(x, z);
@@ -205,6 +209,12 @@ export function heightAt(x, z) {
   if (d < FARM.blend) {
     const w = smoothstep(FARM.blend, FARM.radius, d);
     h = lerp(h, FARM.y, w);
+  }
+  // 温泉池要坐得住：周围压成一小块平地
+  const ds = Math.hypot(x - SPRING.x, z - SPRING.z);
+  if (ds < 14) {
+    const w = smoothstep(14, SPRING.r, ds);
+    h = lerp(h, SPRING.y, w);
   }
   // 冰面上可以走：脚踩冰面，不是踩湖底
   const id = iceDist(x, z);

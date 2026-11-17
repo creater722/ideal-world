@@ -578,7 +578,7 @@
       <button class="scene" data-scene="grass">草原</button>
       <button class="scene on" data-scene="snow" aria-current="true">雪原</button>
     </div>
-    <div class="tip">鼠标看 · WASD 走 · 点击收菜 · E 互动 · 水井浇水 · 推车运粮</div>
+    <div class="tip">鼠标看 · WASD 走 · E 互动 · T 换时辰</div>
   </div>
 </div>
 
@@ -612,7 +612,7 @@
     </div>
 
     <div class="panel" id="panel-save">
-      <div class="save-state" id="save-state">登录后，菜地、推车、粮仓和地面上的收成会保存到云端。</div>
+      <div class="save-state" id="save-state">登录后，你走到哪儿、停在哪个时辰，都会记在云端。</div>
 
       <div id="save-form">
         <input class="save-input" id="save-user" maxlength="24" placeholder="用户名（3-24 位字母数字）" autocomplete="username">
@@ -662,33 +662,9 @@
   <div class="clock" id="time">16:24 · 午后</div>
   <div class="place" id="place"></div>
 
-  <div class="seeds" id="seeds">
-    <span class="label">种子</span>
-    <span class="seed on" data-k="0"><i style="--c:#e07a2f"></i><b>1</b>胡萝卜</span>
-    <span class="seed" data-k="1"><i style="--c:#d8b45c"></i><b>2</b>小麦</span>
-    <span class="seed" data-k="2"><i style="--c:#d24b39"></i><b>3</b>番茄</span>
-    <span class="divider"></span>
-    <span class="water empty" id="water"><i></i>水壶 <b id="waterN">0</b></span>
-  </div>
-
-  <div class="stock" id="stock">
-    <div class="stock-row">
-      <span class="label">推车</span>
-      <span class="item"><i style="--c:#e07a2f"></i>胡萝卜 <em id="c0">0</em></span>
-      <span class="item"><i style="--c:#d8b45c"></i>小麦 <em id="c1">0</em></span>
-      <span class="item"><i style="--c:#d24b39"></i>番茄 <em id="c2">0</em></span>
-    </div>
-    <div class="stock-row storage-row">
-      <span class="label">粮仓</span>
-      <span class="item"><i style="--c:#e07a2f"></i>胡萝卜 <em id="s0">0</em></span>
-      <span class="item"><i style="--c:#d8b45c"></i>小麦 <em id="s1">0</em></span>
-      <span class="item"><i style="--c:#d24b39"></i>番茄 <em id="s2">0</em></span>
-    </div>
-  </div>
-
   <div class="prompt" id="prompt"></div>
   <div class="toast" id="toast"></div>
-  <div class="keys" id="keys">WASD 走 · 移动鼠标看 · 点击收菜 · 1/2/3 选种 · E 互动 / 推车 · T 换时辰 · M 声音 · H 净屏 · Esc 菜单</div>
+  <div class="keys" id="keys">WASD 走 · 移动鼠标看 · E 互动 · T 换时辰 · M 声音 · H 净屏 · Esc 菜单</div>
 </div>
 
 <div id="fade"></div>

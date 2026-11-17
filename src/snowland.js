@@ -14,8 +14,7 @@ import {
 import { createPostFX } from './postfx.js';
 import { createMusic } from './music.js';
 import { createTimeOfDay, phaseName, formatClock } from './snowtime.js';
-import { createFarm, CROPS } from './grassfarm.js';
-import { createHerd } from './grassanimals.js';
+import { createSnowPlaces } from './snowplaces.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* ---------------------------------------------------------
@@ -3152,7 +3151,7 @@ dandelions.frustumCulled = false;
 scene.add(dandelions);
 
 /* ---------------- 萤火虫：天黑了才出来，成群结队地亮 ---------------- */
-const FIREFLY_COUNT = 1200;
+const FIREFLY_COUNT = 240;   // 雪原没有萤火虫，只有一点点浮在草窝上的雪光
 const FIREFLY_CLUSTERS = 7;
 const fireflyCenters = [
   { x: MEADOWS[0].x, z: MEADOWS[0].z, r: 3.4 },
@@ -3224,8 +3223,8 @@ const fireflyMat = new THREE.ShaderMaterial({
       // 同一窝的萤火虫周期一致，只差一点相位：看起来像一片在呼吸
       float pulse = 0.5 + 0.5 * sin(uTime * (1.2 + aCluster * 0.19) + aCluster * 2.3 + aKick * 0.55);
       vGlow = 0.12 + 0.88 * pow(pulse, 2.4);
-      vHue = mix(vec3(0.56, 1.0, 0.32), vec3(1.0, 0.92, 0.52), fract(aPhase * 7.3));
-      gl_PointSize = aSize * uPixelRatio * 48.0 / max(-mv.z, 0.5);
+      vHue = mix(vec3(0.58, 0.82, 1.0), vec3(0.86, 0.95, 1.0), fract(aPhase * 7.3));
+      gl_PointSize = aSize * uPixelRatio * 16.0 / max(-mv.z, 0.5);
     }
   `,
   fragmentShader: /* glsl */ `
@@ -3452,10 +3451,29 @@ const bats = [];
 }
 
 /* =========================================================
-   8. 农场与动物
+   8. 雪原自己的地方：猎屋、温泉、冰钓屋、雪人、雪橇、白狐
    ========================================================= */
 
-const farm = createFarm(scene);
+// 雪原没有农场。草原那套菜地交互代码还挂在上面，这里留一个够不着的空壳，
+// 既不会报错，也不会在雪地里长出胡萝卜。
+const FAR = { x: 1e6, z: 1e6 };
+const farm = {
+  beds: [], cart: [0, 0, 0], storage: [0, 0, 0], cartCap: 18, canMax: 8,
+  storageBin: FAR, door: FAR, bench: { x: 1e6, z: 1e6, yaw: 0 }, well: FAR,
+  cartWorld: FAR, clickTargets: [], floorLift: () => 0,
+  update() {}, setNight() {}, setPushing() {},
+  getSelected: () => 0, setSelected() {},
+  waterCharges: () => 0, fillCan() {}, cartLoad: () => 0, unloadCart: () => false,
+  isInsideBarn: () => false, isDoorOpen: () => false, toggleDoor: () => false,
+  pushDoor() {}, closeDoor() {}, moveCart() {}, nearestBed: () => null,
+  bedProgress: () => 0, harvestBed: () => null, collectProduce() {},
+  interact: () => ({ type: 'none' }), resolve: (x, z) => ({ x, z }), pollEvents: () => [],
+  serialize: () => ({}), restore: () => false,
+};
+
+const CROPS = [{ name: '' }, { name: '' }, { name: '' }];
+
+const snowPlaces = createSnowPlaces(scene, { heightAt, iceDist, ICE });
 
 let audioCtx = null;
 let animalCallReady = true;
@@ -3586,7 +3604,7 @@ function playAnimalStep(animal) {
   src.stop(t + 0.15);
 }
 
-const herd = createHerd(scene, { onSound: playAnimalSound, onStep: playAnimalStep });
+const herd = { animals: [], update() {} };
 
 /* =========================================================
    9. 玩家
@@ -3615,12 +3633,12 @@ const placeEl = document.getElementById('place');
 const timeEl = document.getElementById('time');
 const promptEl = document.getElementById('prompt');
 const toastEl = document.getElementById('toast');
-const seedEls = Array.from(document.querySelectorAll('.seed'));
+const seedEls = [];
 const stockPanel = document.getElementById('stock');
-const stockEls = [document.getElementById('c0'), document.getElementById('c1'), document.getElementById('c2')];
-const storageEls = [document.getElementById('s0'), document.getElementById('s1'), document.getElementById('s2')];
-const waterPill = document.getElementById('water');
-const waterN = document.getElementById('waterN');
+const stockEls = [];
+const storageEls = [];
+const waterPill = null;
+const waterN = null;
 
 const raycaster = new THREE.Raycaster();
 const clickNdc = new THREE.Vector2();
@@ -3850,29 +3868,10 @@ function cancelListening() {
   listening = null;
 }
 
-function setSeedUI() {
-  const sel = farm.getSelected();
-  seedEls.forEach((el, i) => el.classList.toggle('on', i === sel));
-}
-
-function updateStock(bump = false) {
-  for (let i = 0; i < 3; i++) stockEls[i].textContent = String(farm.cart[i]);
-  if (bump && stockPanel) {
-    stockPanel.classList.remove('bump');
-    void stockPanel.offsetWidth;
-    stockPanel.classList.add('bump');
-  }
-}
-
-function updateStorage() {
-  for (let i = 0; i < 3; i++) storageEls[i].textContent = String(farm.storage[i]);
-}
-
-function updateWater() {
-  const n = farm.waterCharges();
-  if (waterN) waterN.textContent = String(n);
-  if (waterPill) waterPill.classList.toggle('empty', n === 0);
-}
+function setSeedUI() {}
+function updateStock() {}
+function updateStorage() {}
+function updateWater() {}
 
 /* =========================================================
    10.5 云端存档
@@ -3976,7 +3975,7 @@ async function cloudCall(action, payload, method = 'POST') {
 function cloudSnapshot() {
   return {
     v: 1,
-    world: 'grass',
+    world: 'snow',
     hour: Math.round(time.hour * 1000) / 1000,
     player: {
       x: Math.round(player.x * 100) / 100,
@@ -3989,7 +3988,8 @@ function cloudSnapshot() {
 }
 
 function cloudApply(data) {
-  if (!data || typeof data !== 'object' || data.v !== 1 || !data.farm) return false;
+  if (!data || typeof data !== 'object' || data.v !== 1) return false;
+  if (data.world && data.world !== 'snow') return false;
   if (Number.isFinite(data.hour)) {
     time.setHour(((data.hour % 24) + 24) % 24);
   }
@@ -4004,7 +4004,7 @@ function cloudApply(data) {
     player.vz = 0;
     camY = heightAt(player.x, player.z) + EYE;
   }
-  if (!farm.restore(data.farm)) return false;
+  if (data.farm && Object.keys(data.farm).length && !farm.restore(data.farm)) return false;
   seated = false;
   pushingCart = false;
   farm.setPushing(false);
@@ -4289,6 +4289,13 @@ function renderPrompt() {
     return;
   }
 
+  // 雪原自己的东西：小屋的门、温泉、冰钓屋、雪人、雪橇
+  const sp = snowPlaces.prompt(player);
+  if (sp) {
+    show(sp.key, sp.html);
+    return;
+  }
+
   const binD = Math.hypot(player.x - farm.storageBin.x, player.z - farm.storageBin.z);
   if (farm.isInsideBarn(player.x, player.z) && binD < 2.3) {
     nearBin = true;
@@ -4497,6 +4504,11 @@ function fillWater() {
 function interact() {
   if (seated) {
     standUp();
+    return;
+  }
+  const snowMsg = snowPlaces.interact(player);
+  if (snowMsg) {
+    showToast(snowMsg, 3200);
     return;
   }
   if (nearBin) {
@@ -5416,7 +5428,7 @@ function applyTime() {
   pollenMat.size = 0.1 + duskK * 0.04;
   dandelionMat.color.setRGB(1.0, 0.98, 0.94).lerp(tmpColor.setRGB(1.0, 0.80, 0.52), duskK * 0.85);
 
-  fireflyMat.uniforms.uOpacity.value = smoothstep(4, -5, s.elev) * 0.95;
+  fireflyMat.uniforms.uOpacity.value = smoothstep(2, -8, s.elev) * 0.42;
   pollenMat.opacity = (0.52 + duskK * 0.30) * (1 - s.night * 0.88);
   dandelionMat.opacity = (0.58 + duskK * 0.22) * (1 - s.night * 0.9);
 
@@ -5609,9 +5621,13 @@ function updateWorld(t, dt) {
 
   updateFireflies(t, dt);
 
-  // 农场
-  farm.update(t, dt);
-  herd.update(t, dt, player, timeState.night);
+  // 雪原：蒸汽、灯火、白狐
+  snowPlaces.update(t, dt, {
+    night: timeState.night,
+    dusk: timeState.dusk,
+    sun: timeState.sun,
+    sky: timeState.hemiSky,
+  });
 
   // 地点名
   const inFarm = Math.abs(player.x - FARM.x) < FARM.halfX + 0.5 && Math.abs(player.z - FARM.z) < FARM.halfZ + 0.5;
