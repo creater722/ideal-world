@@ -354,7 +354,7 @@ export function createSnowPlaces(scene, { heightAt, iceDist, ICE }) {
       x: SPRING.x,
       z: SPRING.z + SPRING.r + 1.6,
       r: 5.6,
-      label: () => '在池边坐一会儿',
+      label: () => '坐到水里泡一会儿',
       sub: '水是热的，雪落在水面上就化了',
     });
   }
@@ -437,7 +437,7 @@ export function createSnowPlaces(scene, { heightAt, iceDist, ICE }) {
     { x: 18, z: 206, s: 1.1, scarf: 0x7a5230 },
   ];
   {
-    const snowMat = new THREE.MeshStandardMaterial({ color: 0xf3f8fc, roughness: 0.9 });
+    const snowMat = new THREE.MeshStandardMaterial({ color: 0xdfe8f2, roughness: 1 });
     const coal = new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 1 });
     const carrot = new THREE.MeshStandardMaterial({ color: 0xd97b2a, roughness: 0.8 });
     for (const sm of SNOWMEN) {
@@ -657,6 +657,332 @@ export function createSnowPlaces(scene, { heightAt, iceDist, ICE }) {
   }
 
   /* =========================================================
+     8. 冰洞：湖西岸一座能走进去的冰洞
+     ========================================================= */
+  const CAVE = { x: -98, z: 392, yaw: 0.35 };
+  {
+    const cy = heightAt(CAVE.x, CAVE.z);
+    const g = new THREE.Group();
+    g.position.set(CAVE.x, cy, CAVE.z);
+    g.rotation.y = CAVE.yaw;
+
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x55524d, roughness: 1, flatShading: true });
+    const rockMat2 = new THREE.MeshStandardMaterial({ color: 0x46433f, roughness: 1, flatShading: true });
+    const snowMat = new THREE.MeshStandardMaterial({ color: 0xe6eef6, roughness: 1 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x121a22, roughness: 1, metalness: 0 });
+    const iceMat = new THREE.MeshStandardMaterial({
+      color: 0xbfe0f2, roughness: 0.12, metalness: 0.05,
+      transparent: true, opacity: 0.8, envMapIntensity: 1.6,
+    });
+
+    // 岩丘：一整块被雪盖住的山包，不是一堆散石
+    const hill = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), rockMat);
+    hill.scale.set(7.2, 3.4, 6.4);
+    hill.position.set(0, -0.6, -0.8);
+    hill.castShadow = true;
+    hill.receiveShadow = true;
+    g.add(hill);
+    const hillSnow = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 12), new THREE.MeshStandardMaterial({ color: 0xd8e3ee, roughness: 1 }));
+    hillSnow.scale.set(6.9, 1.35, 6.1);
+    hillSnow.position.set(0, 2.15, -0.9);
+    g.add(hillSnow);
+    // 几块露出雪面的石头，打碎轮廓
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2 + 0.4;
+      if (Math.abs(a - Math.PI / 2) < 0.8) continue;
+      const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 0), i % 2 ? rockMat : rockMat2);
+      const sc = 1.2 + (i % 3) * 0.5;
+      rock.scale.set(sc, sc * 0.85, sc * 0.9);
+      rock.position.set(Math.cos(a) * 5.4, 0.2, Math.sin(a) * 4.9 - 0.6);
+      rock.rotation.set(i, i * 1.7, i * 0.4);
+      rock.castShadow = true;
+      g.add(rock);
+    }
+
+    // 门洞：一条真正的通道 —— 两侧墙 + 顶 + 地面 + 尽头堵死
+    const portal = new THREE.Group();
+    portal.position.set(0, 0, 4.4);
+    const wallL = box(0.6, 3.2, 4.4, darkMat, -1.55, 1.6, -1.9);
+    const wallR = box(0.6, 3.2, 4.4, darkMat, 1.55, 1.6, -1.9);
+    const roof = box(3.7, 0.6, 4.4, darkMat, 0, 3.0, -1.9);
+    const back = box(3.4, 3.2, 0.5, darkMat, 0, 1.6, -4.0);
+    for (const m of [wallL, wallR, roof, back]) portal.add(m);
+    // 通道的地面：冰
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(2.9, 4.2), iceMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0, 0.06, -1.9);
+    portal.add(floor);
+    // 门框：石头包一圈，进门才不突兀
+    const pillarGeo = new THREE.IcosahedronGeometry(1, 0);
+    for (const s2 of [-1, 1]) {
+      for (let k = 0; k < 2; k++) {
+        const rock = new THREE.Mesh(pillarGeo, k ? rockMat2 : rockMat);
+        rock.scale.set(1.05, 1.5, 1.0);
+        rock.position.set(s2 * 1.9, 0.6 + k * 1.5, 0.2);
+        rock.rotation.set(k, s2 * k, k * 0.5);
+        rock.castShadow = true;
+        portal.add(rock);
+      }
+    }
+    const arch = new THREE.Mesh(pillarGeo, rockMat);
+    arch.scale.set(2.6, 0.8, 1.1);
+    arch.position.set(0, 3.3, 0.2);
+    arch.rotation.set(0.25, 0.3, 0.05);
+    arch.castShadow = true;
+    portal.add(arch);
+    g.add(portal);
+
+    // 洞里的冰柱
+    const icicle = new THREE.ConeGeometry(0.08, 0.8, 6);
+    const hang = new THREE.InstancedMesh(icicle, iceMat, 22);
+    const dm = new THREE.Object3D();
+    let hn = 0;
+    for (let i = 0; i < 22; i++) {
+      const a = (i / 22) * Math.PI * 2 * 1.6;
+      dm.position.set(Math.cos(a) * (0.5 + (i % 4) * 0.28), 2.75 + (i % 3) * 0.1, 2.9 - (i % 5) * 0.8);
+      dm.rotation.set(Math.PI, a, 0);
+      const sc = 0.7 + (i % 4) * 0.3;
+      dm.scale.set(sc, sc * (0.8 + (i % 3) * 0.3), sc);
+      dm.updateMatrix();
+      hang.setMatrixAt(hn++, dm.matrix);
+    }
+    hang.count = hn;
+    g.add(hang);
+
+    // 深处的冰晶：洞里唯一的光源
+    const crystalMat = new THREE.MeshStandardMaterial({
+      color: 0x9fe8ff, emissive: new THREE.Color(0x54c8e8), emissiveIntensity: 1.8, roughness: 0.2,
+    });
+    for (let i = 0; i < 4; i++) {
+      const cr = new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 0), crystalMat);
+      cr.position.set(-1.0 + i * 0.66, 0.5, 1.2 - (i % 2) * 0.7);
+      cr.scale.y = 1.9;
+      cr.rotation.y = i * 1.3;
+      g.add(cr);
+    }
+    const caveLight = new THREE.PointLight(0x7fe0ff, 1.7, 12, 2);
+    caveLight.position.set(0, 1.9, 1.8);
+    g.add(caveLight);
+    clockLights.push({ light: caveLight, base: 1.6, lamp: null });
+
+    // 门口踩出来的脚印
+    for (let i = 0; i < 6; i++) {
+      const step = new THREE.Mesh(
+        new THREE.CircleGeometry(0.42 - i * 0.03, 10),
+        new THREE.MeshStandardMaterial({ color: 0xd2dfeb, roughness: 1 })
+      );
+      step.rotation.x = -Math.PI / 2;
+      step.position.set((i % 2 ? 0.3 : -0.28), 0.02, 6.0 + i * 1.1);
+      g.add(step);
+    }
+
+    group.add(g);
+    tips.push({
+      id: 'cave',
+      key: 'cave',
+      x: CAVE.x + Math.sin(CAVE.yaw) * 6.4,
+      z: CAVE.z + Math.cos(CAVE.yaw) * 6.4,
+      r: 2.8,
+      label: () => '走进冰洞',
+      sub: '里面比外面安静得多',
+    });
+  }
+
+  /* =========================================================
+     9. 营火：猎屋旁边的一堆火
+     ========================================================= */
+  const FIRE = { x: 11.5, z: -20.5 };
+  const fireParts = [];
+  {
+    const fy = heightAt(FIRE.x, FIRE.z);
+    const g = new THREE.Group();
+    g.position.set(FIRE.x, fy, FIRE.z);
+
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x5c5851, roughness: 1, flatShading: true });
+    const rockGeo = new THREE.DodecahedronGeometry(1, 0);
+    for (let i = 0; i < 11; i++) {
+      const a = (i / 11) * Math.PI * 2;
+      const rock = new THREE.Mesh(rockGeo, stoneMat);
+      const s2 = 0.2 + ((i * 31) % 10) / 60;
+      rock.scale.set(s2, s2 * 0.6, s2);
+      rock.position.set(Math.cos(a) * 1.15, s2 * 0.3, Math.sin(a) * 1.15);
+      rock.rotation.set(i, i * 2, 0);
+      rock.castShadow = true;
+      g.add(rock);
+    }
+    // 交叉的柴
+    for (let i = 0; i < 5; i++) {
+      const log = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 1.35, 6), woodMat(0x3e2a1d));
+      log.position.set(0, 0.2, 0);
+      log.rotation.set(Math.PI / 2 - 0.35, (i / 5) * Math.PI * 2, 0);
+      log.castShadow = true;
+      g.add(log);
+    }
+    // 火：三层锥体叠在一起，加法混合
+    const flameMats = [
+      new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ color: 0xffb24a, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }),
+    ];
+    for (let i = 0; i < 3; i++) {
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.42 - i * 0.1, 0.9 - i * 0.18, 8), flameMats[i]);
+      cone.position.set((i - 1) * 0.08, 0.62 + i * 0.04, (i % 2) * 0.06);
+      g.add(cone);
+      fireParts.push({ mesh: cone, phase: i * 1.7, base: 1 - i * 0.12 });
+    }
+    const fireLight = new THREE.PointLight(0xff9a4a, 1.4, 14, 2);
+    fireLight.position.set(0, 1.1, 0);
+    g.add(fireLight);
+    clockLights.push({ light: fireLight, base: 1.6, lamp: null });
+
+    // 两根坐人的圆木
+    for (const s2 of [-1, 1]) {
+      const seat = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.24, 1.6, 8), woodMat(0x5a3f2b));
+      seat.rotation.z = Math.PI / 2;
+      seat.rotation.y = s2 * 0.4;
+      seat.position.set(s2 * 1.9, 0.24, s2 * 0.6);
+      seat.castShadow = true;
+      g.add(seat);
+    }
+
+    group.add(g);
+    tips.push({
+      id: 'fire',
+      key: 'fire',
+      x: FIRE.x,
+      z: FIRE.z,
+      r: 2.4,
+      label: () => '在火边烤烤手',
+      sub: '柴是干的，火一直没灭',
+    });
+  }
+
+  /* =========================================================
+     10. 路标石堆 + 倒木：让雪原不那么空
+     ========================================================= */
+  {
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x67635c, roughness: 1, flatShading: true });
+    const snowMat = new THREE.MeshStandardMaterial({ color: 0xeef4fa, roughness: 0.95 });
+    const rockGeo = new THREE.DodecahedronGeometry(1, 0);
+    // 沿着去冰湖的雪道，每隔几十米垒一堆
+    const path = [[-3, 44], [-9, 82], [-11, 120], [-8, 156], [-3, 184]];
+    for (const [px, pz] of path) {
+      const y = heightAt(px + 2.2, pz + 1.2);
+      const g = new THREE.Group();
+      g.position.set(px + 2.2, y, pz + 1.2);
+      let hh = 0;
+      for (let i = 0; i < 4; i++) {
+        const s2 = 0.42 - i * 0.075;
+        const rock = new THREE.Mesh(rockGeo, stoneMat);
+        rock.scale.set(s2 * 1.2, s2 * 0.7, s2);
+        rock.position.y = hh + s2 * 0.32;
+        rock.rotation.set(i * 1.1, i * 2.1, i * 0.4);
+        rock.castShadow = true;
+        g.add(rock);
+        // 顶上一小撮雪
+        if (i === 3) {
+          const cap = new THREE.Mesh(rockGeo, snowMat);
+          cap.scale.set(s2 * 1.05, s2 * 0.35, s2 * 0.9);
+          cap.position.y = hh + s2 * 0.62;
+          g.add(cap);
+        }
+        hh += s2 * 0.55;
+      }
+      group.add(g);
+    }
+  }
+
+  {
+    // 倒木与树桩：松林边缘的旧痕迹
+    const barkMat = new THREE.MeshStandardMaterial({ color: 0x4b3a2a, roughness: 1 });
+    const snowMat = new THREE.MeshStandardMaterial({ color: 0xeef4fa, roughness: 0.95 });
+    const logs = [
+      { x: 58, z: -84, yaw: 0.7, len: 3.4 },
+      { x: -62, z: 128, yaw: -1.1, len: 2.8 },
+      { x: 92, z: 214, yaw: 0.2, len: 3.9 },
+      { x: -120, z: 260, yaw: 1.4, len: 3.1 },
+      { x: 30, z: 470, yaw: -0.6, len: 2.6 },
+      { x: -150, z: -20, yaw: 0.9, len: 3.6 },
+    ];
+    for (const L of logs) {
+      const y = heightAt(L.x, L.z);
+      const g = new THREE.Group();
+      g.position.set(L.x, y, L.z);
+      g.rotation.y = L.yaw;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.32, L.len, 8), barkMat);
+      trunk.rotation.z = Math.PI / 2;
+      trunk.position.y = 0.3;
+      trunk.castShadow = true;
+      trunk.receiveShadow = true;
+      g.add(trunk);
+      // 沿树干的一道雪
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(L.len * 0.94, 0.08, 0.3), snowMat);
+      strip.position.set(0, 0.52, 0);
+      g.add(strip);
+      // 断口
+      const cut = new THREE.Mesh(new THREE.CircleGeometry(0.24, 8), new THREE.MeshStandardMaterial({ color: 0xa78a63, roughness: 1 }));
+      cut.rotation.y = Math.PI / 2;
+      cut.position.set(L.len * 0.5, 0.3, 0);
+      g.add(cut);
+      group.add(g);
+    }
+    for (const S of [{ x: 46, z: -60 }, { x: -80, z: 180 }, { x: 118, z: 300 }, { x: -40, z: -120 }]) {
+      const y = heightAt(S.x, S.z);
+      const g = new THREE.Group();
+      g.position.set(S.x, y, S.z);
+      const stump = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 0.7, 9), barkMat);
+      stump.position.y = 0.35;
+      stump.castShadow = true;
+      g.add(stump);
+      const top = new THREE.Mesh(new THREE.CircleGeometry(0.4, 9), new THREE.MeshStandardMaterial({ color: 0xa78a63, roughness: 1 }));
+      top.rotation.x = -Math.PI / 2;
+      top.position.y = 0.71;
+      g.add(top);
+      group.add(g);
+    }
+  }
+
+  /* =========================================================
+     11. 冰脊：湖面上被挤出来的碎冰
+     ========================================================= */
+  {
+    const shardMat = new THREE.MeshStandardMaterial({
+      color: 0xd6ecfa,
+      roughness: 0.18,
+      metalness: 0.02,
+      transparent: true,
+      opacity: 0.85,
+      flatShading: true,
+      envMapIntensity: 1.3,
+    });
+    const shardGeo = new THREE.ConeGeometry(0.5, 1.5, 5);
+    const count = 150;
+    const mesh = new THREE.InstancedMesh(shardGeo, shardMat, count);
+    const dm = new THREE.Object3D();
+    let n2 = 0;
+    for (let i = 0; i < count; i++) {
+      // 只在冰面上，避开钓鱼屋
+      const a = (i * 2.399) % (Math.PI * 2);
+      const r = Math.sqrt((i % 97) / 97) * (ICE.r * 0.95);
+      const x = ICE.x + Math.cos(a) * r;
+      const z = ICE.z + Math.sin(a) * r * 0.94;
+      if (iceDist(x, z) > 0.96) continue;
+      if (Math.hypot(x - HUT.x, z - HUT.z) < 6) continue;
+      dm.position.set(x, ICE.level - 0.28, z);
+      dm.rotation.set((i % 5 - 2) * 0.18, i * 1.7, (i % 7 - 3) * 0.14);
+      const sc = 0.35 + ((i * 29) % 10) / 12;
+      dm.scale.set(sc, sc * (1.1 + (i % 4) * 0.35), sc);
+      dm.updateMatrix();
+      mesh.setMatrixAt(n2++, dm.matrix);
+    }
+    mesh.count = n2;
+    mesh.frustumCulled = false;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  /* =========================================================
      更新：蒸汽、炊烟、灯火、狐狸
      ========================================================= */
   function update(t, dt, ctx) {
@@ -735,6 +1061,13 @@ export function createSnowPlaces(scene, { heightAt, iceDist, ICE }) {
       springLight.intensity = night * 2.4 + 0.15;
     }
 
+    // 火苗：三层锥体各自抖，越里面越稳
+    for (const f of fireParts) {
+      const k = 1 + Math.sin(t * 9.3 + f.phase) * 0.08 + Math.sin(t * 21.7 + f.phase * 2) * 0.04;
+      f.mesh.scale.set(f.base * (1 + Math.sin(t * 7.1 + f.phase) * 0.05), k, f.base);
+      f.mesh.rotation.y = t * 1.6 + f.phase;
+    }
+
     if (springWater) {
       springWater.uTime.value = t;
       springWater.uNight.value = night;
@@ -770,10 +1103,12 @@ export function createSnowPlaces(scene, { heightAt, iceDist, ICE }) {
         d0.target = d0.open ? -1.25 : 0;
         return d0.open ? '屋里的热气扑出来，炉子上坐着水。' : '把门带上了。';
       }
-      if (tp.id === 'spring') return '水很烫。坐着的时候，雪落在水面上，一下就没了。';
+      if (tp.id === 'spring') return '__soak__';
       if (tp.id === 'fishing') return Math.random() < 0.35 ? '拎上来一条小的，冰面上蹦了两下。' : '守了很久，鱼线一动没动。';
       if (tp.id === 'sled') return '坐上去，腿一蹬，雪从滑板底下唰地散开。';
       if (tp.id === 'snowman') return '把雪人歪掉的脑袋扶正了一点。';
+      if (tp.id === 'cave') return '洞里挂满了冰，呼吸的声音在石壁上来回撞。';
+      if (tp.id === 'fire') return '火苗舔着柴，手心一下就暖了。';
       return null;
     }
     return null;

@@ -2363,7 +2363,7 @@ const pineGeo = (() => {
     cone.translate(0, L.y + L.h * 0.5, 0);
     parts.push(paintGeo(cone, L.c));
     // 雪盖：只盖住每层树冠的上半截，边缘不能大过树冠，否则像千层饼
-    const cap = new THREE.ConeGeometry(L.r * 0.55, L.h * 0.34, 9);
+    const cap = new THREE.ConeGeometry(L.r * 0.44, L.h * 0.3, 9);
     cap.translate(0, L.y + L.h * 0.82, 0);
     parts.push(paintGeo(cap, 0xeff5fa));
   }
@@ -3615,6 +3615,130 @@ const PLAYER_R = 0.34;
 const SPAWN = { x: 0, z: 8 };
 const player = { x: SPAWN.x, z: SPAWN.z, yaw: 0, pitch: -0.02, vx: 0, vz: 0, bob: 0 };
 let camY = heightAt(player.x, player.z) + EYE;
+
+/* ---------------- 雪地脚印：走过的地方留一串浅浅的坑 ---------------- */
+const FOOT_MAX = 90;
+const footGeo = new THREE.BufferGeometry();
+const footPos = new Float32Array(FOOT_MAX * 4 * 3);
+const footBirth = new Float32Array(FOOT_MAX * 4);
+const footUv = new Float32Array(FOOT_MAX * 4 * 2);
+const footIdx = new Uint16Array(FOOT_MAX * 6);
+for (let i = 0; i < FOOT_MAX; i++) {
+  const v = i * 4;
+  footUv.set([0, 0, 1, 0, 1, 1, 0, 1], i * 8);
+  footIdx.set([v, v + 1, v + 2, v, v + 2, v + 3], i * 6);
+}
+footGeo.setAttribute('position', new THREE.BufferAttribute(footPos, 3));
+footGeo.setAttribute('uv', new THREE.BufferAttribute(footUv, 2));
+footGeo.setAttribute('aBirth', new THREE.BufferAttribute(footBirth, 1));
+footGeo.setIndex(new THREE.BufferAttribute(footIdx, 1));
+
+function makeFootTexture() {
+  const S = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, S, S);
+  // 一个靴子印：前掌 + 后跟
+  const g = ctx.createRadialGradient(S * 0.5, S * 0.36, 2, S * 0.5, S * 0.4, S * 0.34);
+  g.addColorStop(0, 'rgba(0,0,0,0.85)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(S * 0.5, S * 0.36, S * 0.26, S * 0.22, 0, 0, TAU);
+  ctx.fill();
+  const g2 = ctx.createRadialGradient(S * 0.5, S * 0.7, 1, S * 0.5, S * 0.7, S * 0.22);
+  g2.addColorStop(0, 'rgba(0,0,0,0.7)');
+  g2.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g2;
+  ctx.beginPath();
+  ctx.ellipse(S * 0.5, S * 0.7, S * 0.18, S * 0.16, 0, 0, TAU);
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(c);
+  return tex;
+}
+
+const footMat = new THREE.ShaderMaterial({
+  uniforms: { uTime: { value: 0 }, uMap: { value: makeFootTexture() } },
+  transparent: true,
+  depthWrite: false,
+  polygonOffset: true,
+  polygonOffsetFactor: -3,
+  vertexShader: /* glsl */ `
+    attribute float aBirth;
+    uniform float uTime;
+    varying vec2 vUv;
+    varying float vAge;
+    void main() {
+      vUv = uv;
+      vAge = (uTime - aBirth) / 30.0;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D uMap;
+    varying vec2 vUv;
+    varying float vAge;
+    void main() {
+      if (vAge < 0.0 || vAge > 1.0) discard;
+      float a = texture2D(uMap, vUv).a;
+      float fade = (1.0 - vAge) * (1.0 - vAge);
+      gl_FragColor = vec4(vec3(0.30, 0.38, 0.47), a * fade * 0.5);
+    }
+  `,
+});
+const footMesh = new THREE.Mesh(footGeo, footMat);
+footMesh.frustumCulled = false;
+footMesh.renderOrder = 1;
+scene.add(footMesh);
+
+let footCursor = 0;
+let lastFootX = player.x;
+let lastFootZ = player.z;
+let footSide = 1;
+
+function addFootprint(t) {
+  const dx = player.x - lastFootX;
+  const dz = player.z - lastFootZ;
+  if (dx * dx + dz * dz < 0.36) return;
+  if (iceDist(player.x, player.z) < 0.99) return;   // 冰面上不留脚印
+  const speed = Math.hypot(player.vx, player.vz);
+  if (speed < 0.35) return;
+  lastFootX = player.x;
+  lastFootZ = player.z;
+  footSide = -footSide;
+
+  const yaw = player.yaw;
+  const fx = -Math.sin(yaw);
+  const fz = -Math.cos(yaw);
+  const rx = -Math.cos(yaw);
+  const rz = Math.sin(yaw);
+  const ox = rx * 0.17 * footSide;
+  const oz = rz * 0.17 * footSide;
+  const cx = player.x + ox;
+  const cz = player.z + oz;
+  const w = 0.2;
+  const l = 0.34;
+
+  const base = footCursor * 12;
+  const corners = [
+    [cx + rx * -w + fx * -l, cz + rz * -w + fz * -l],
+    [cx + rx * w + fx * -l, cz + rz * w + fz * -l],
+    [cx + rx * w + fx * l, cz + rz * w + fz * l],
+    [cx + rx * -w + fx * l, cz + rz * -w + fz * l],
+  ];
+  for (let i = 0; i < 4; i++) {
+    const [px, pz] = corners[i];
+    footPos[base + i * 3] = px;
+    footPos[base + i * 3 + 1] = heightAt(px, pz) + 0.035;
+    footPos[base + i * 3 + 2] = pz;
+    footBirth[footCursor * 4 + i] = t;
+  }
+  footGeo.attributes.position.needsUpdate = true;
+  footGeo.attributes.aBirth.needsUpdate = true;
+  footCursor = (footCursor + 1) % FOOT_MAX;
+}
+
 {
   const dx = FARM.x - player.x;
   const dz = FARM.z - player.z;
@@ -3660,6 +3784,7 @@ let nearWell = false;
 let nearCart = false;
 let pushingCart = false;
 let seated = false;
+let soaking = false;
 let promptKey = '';
 let promptBar = null;
 let toastTimer = null;
@@ -4289,6 +4414,11 @@ function renderPrompt() {
     return;
   }
 
+  if (soaking) {
+    show('soak', `<span class="key">E</span><span>从水里出来</span><span class="sub">再泡一会儿也行</span>`);
+    return;
+  }
+
   // 雪原自己的东西：小屋的门、温泉、冰钓屋、雪人、雪橇
   const sp = snowPlaces.prompt(player);
   if (sp) {
@@ -4502,11 +4632,27 @@ function fillWater() {
 }
 
 function interact() {
+  if (soaking) {
+    soaking = false;
+    showToast('从水里出来，风一吹，脸是热的。', 2600);
+    promptKey = '';
+    renderPrompt();
+    return;
+  }
   if (seated) {
     standUp();
     return;
   }
   const snowMsg = snowPlaces.interact(player);
+  if (snowMsg === '__soak__') {
+    soaking = true;
+    player.vx = 0;
+    player.vz = 0;
+    showToast('水很烫。坐进去的时候，雪落在肩膀上，一下就化了。', 3400);
+    promptKey = '';
+    renderPrompt();
+    return;
+  }
   if (snowMsg) {
     showToast(snowMsg, 3200);
     return;
@@ -5652,6 +5798,18 @@ function updatePlayer(t, dt) {
     return;
   }
 
+  if (soaking) {
+    player.vx = 0;
+    player.vz = 0;
+    updateCartAudio(0, dt);
+    // 泡在水里：眼睛贴着水面，慢慢呼吸
+    const target = heightAt(player.x, player.z) + 0.92 + Math.sin(t * 0.9) * 0.012;
+    camY = lerp(camY, target, 1 - Math.exp(-dt * 6));
+    camera.position.set(player.x, camY, player.z);
+    camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+    return;
+  }
+
   if (seated) {
     player.vx = 0;
     player.vz = 0;
@@ -5787,6 +5945,8 @@ function animate(now) {
 
   updateTime(dt);
   updatePlayer(elapsed, dt);
+  footMat.uniforms.uTime.value = elapsed;
+  if (!soaking && !seated && started) addFootprint(elapsed);
   updateWorld(elapsed, dt);
 
   // 小推车在半路自动装车的事件
